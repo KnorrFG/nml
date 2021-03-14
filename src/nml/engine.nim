@@ -1,16 +1,21 @@
-import core
-import sdl2
+import core, geometry
+import sdl2 except rect, Rect, Point
 
-# -----------------------------------------------------------------------------
-# Engine and Window
-# -----------------------------------------------------------------------------
 
 type 
+  Point = core.Point
+  Rect = core.Rect
+  Size = core.Size
   NElem* = ref NElemObj
   NElemObj = object of RootObj
     children*: seq[NElem]
     window*: Window
-    rect*: Rect
+    pRect: Rect
+    x*, y*, w*, h*, right*, bottom*, centerX*, centerY*: Property(cint)
+    # left and top are procs that return x and y
+    size*: Property(Size)
+    center*, pos*: Property(Point)
+    rect*: Property(Rect)
   Window = ref WindowObj
   WindowObj = object
     win: WindowPtr
@@ -22,6 +27,9 @@ type
     windows: seq[Window]
     
 
+const defaultRect* = v(-1.cint, -1.cint, -1.cint, -1.cint)
+
+
 proc `=destroy`(x: var EngineObj) =
   sdl2.quit()
 
@@ -31,8 +39,150 @@ proc `=destroy`(x: var WindowObj) =
   destroyWindow x.win
 
 
-addNew NElem
+# -----------------------------------------------------------------------------
+# NElem
+# -----------------------------------------------------------------------------
 
+template addNew*(name: untyped) =
+  proc `new name`*(): name = 
+    new result
+    result.initNElem()
+
+
+#template makeScalarSetter(symbol)
+proc initNElem*(me: NElem) =
+  me.pRect = defaultRect
+
+  proc setX(x: cint) =
+    me.pRect.x = x
+    me.x.onChange.invoke(x)
+    me.right.onChange.invoke(me.pRect.right)
+    me.centerX.onChange.invoke(me.pRect.centerX)
+    me.center.onChange.invoke(me.pRect.center)
+    me.pos.onChange.invoke(me.pRect.pos)
+    me.rect.onChange.invoke(me.pRect)
+
+  proc setY(y: cint) =
+    me.pRect.y = y
+    me.y.onChange.invoke(y)
+    me.bottom.onChange.invoke(me.pRect.bottom)
+    me.centerY.onChange.invoke(me.pRect.centerY)
+    me.center.onChange.invoke(me.pRect.center)
+    me.pos.onChange.invoke(me.pRect.pos)
+    me.rect.onChange.invoke(me.pRect)
+
+  proc setW(w: cint) =
+    me.pRect.w = w
+    me.size.onChange.invoke(me.pRect.size)
+    me.right.onChange.invoke(me.pRect.right)
+    me.centerX.onChange.invoke(me.pRect.centerX)
+    me.center.onChange.invoke(me.pRect.center)
+    me.rect.onChange.invoke(me.pRect)
+
+  proc setH(h: cint) =
+    me.pRect.h = h
+    me.size.onChange.invoke(me.pRect.size)
+    me.bottom.onChange.invoke(me.pRect.bottom)
+    me.centerY.onChange.invoke(me.pRect.centerY)
+    me.center.onChange.invoke(me.pRect.center)
+    me.rect.onChange.invoke(me.pRect)
+
+  me.x = initProperty[cint, EventCint](proc(): cint = me.pRect.x, setX, true)
+  me.y = initProperty[cint, EventCint](proc(): cint = me.pRect.y, setY, true)
+  me.w = initProperty[cint, EventCint](proc(): cint = me.pRect.w, setW, true)
+  me.h = initProperty[cint, EventCint](proc(): cint = me.pRect.h, setH, true)
+
+  proc setRight(nr: cint) = me.x.set nr - me.pRect.w
+  proc setBottom(nb: cint) = me.y.set nb - me.pRect.h
+  proc setCenterX(cx: cint) = me.x.set cx - cint(me.pRect.w/ 2)
+  proc setCenterY(cy: cint) = me.y.set cy - cint(me.pRect.h/ 2)
+
+  me.right = initProperty[cint, EventCint](
+    proc(): cint = me.pRect.right, setRight, true)
+  me.bottom = initProperty[cint, EventCint](
+    proc(): cint = me.pRect.bottom, setBottom, true)
+  me.centerX = initProperty[cint, EventCint](
+    proc(): cint = me.pRect.centerX, setCenterX, true)
+  me.centerY = initProperty[cint, EventCint](
+    proc(): cint = me.pRect.centerY, setCenterY, true)
+
+  proc setSize(size: Size) =
+    ## its done like this, instead of setting w and h via the setters, to avoid
+    ## having center and size invoke 2 events
+    me.pRect.w = size.w
+    me.pRect.h = size.h
+    me.w.onChange.invoke size.w
+    me.h.onChange.invoke size.h
+    me.size.onChange.invoke(me.pRect.size)
+    me.right.onChange.invoke(me.pRect.right)
+    me.bottom.onChange.invoke(me.pRect.bottom)
+    me.centerX.onChange.invoke(me.pRect.centerX)
+    me.centerY.onChange.invoke(me.pRect.centerY)
+    me.center.onChange.invoke(me.pRect.center)
+    me.rect.onChange.invoke(me.pRect)
+
+  me.size = initProperty[Size, EventSize](
+    proc(): Size = me.pRect.size, setSize, true)
+
+  proc setCenter(c: Point) =
+    me.pRect.x = c.x - cint(me.pRect.w / 2)
+    me.pRect.y = c.y - cint(me.pRect.h / 2)
+    me.x.onChange.invoke me.pRect.x
+    me.y.onChange.invoke me.pRect.y
+    me.right.onChange.invoke(me.pRect.right)
+    me.bottom.onChange.invoke(me.pRect.bottom)
+    me.centerX.onChange.invoke(me.pRect.centerX)
+    me.centerY.onChange.invoke(me.pRect.centerY)
+    me.center.onChange.invoke(me.pRect.center)
+    me.pos.onChange.invoke(me.pRect.pos)
+    me.rect.onChange.invoke(me.pRect)
+
+
+  me.center = initProperty[Point, EventPoint](
+    proc(): Point = me.pRect.center, setCenter, true)
+
+  proc setPos(p: Point) =
+    me.pRect.x = p.x
+    me.pRect.y = p.y
+    me.x.onChange.invoke p.x
+    me.y.onChange.invoke p.y
+    me.right.onChange.invoke(me.pRect.right)
+    me.bottom.onChange.invoke(me.pRect.bottom)
+    me.centerX.onChange.invoke(me.pRect.centerX)
+    me.centerY.onChange.invoke(me.pRect.centerY)
+    me.center.onChange.invoke(me.pRect.center)
+    me.pos.onChange.invoke(me.pRect.pos)
+    me.rect.onChange.invoke(me.pRect)
+
+  me.pos = initProperty[Point, EventPoint](
+    proc(): Point = me.pRect.pos, setPos, true)
+
+  proc setRect(r: Rect) =
+    me.pRect = r
+    me.w.onChange.invoke r.w
+    me.h.onChange.invoke r.h
+    me.size.onChange.invoke(me.pRect.size)
+    me.x.onChange.invoke r.x
+    me.y.onChange.invoke r.y
+    me.right.onChange.invoke(me.pRect.right)
+    me.bottom.onChange.invoke(me.pRect.bottom)
+    me.centerX.onChange.invoke(me.pRect.centerX)
+    me.centerY.onChange.invoke(me.pRect.centerY)
+    me.center.onChange.invoke(me.pRect.center)
+    me.pos.onChange.invoke(me.pRect.pos)
+    me.rect.onChange.invoke(me.pRect)
+
+  me.rect = initProperty[Rect, EventRect](
+    proc(): Rect = me.pRect, setRect, true)
+
+
+proc newNElem*(): NElem =
+  new result
+  result.initNElem()
+
+
+proc left*(e: NElem): var Property(cint) = e.x
+proc top*(e: NElem): var Property(cint) = e.y
 
 method draw*(e: NElem, parentRect: Rect, renderer: RendererPtr) 
   {.base, locks: 0.} =
@@ -54,6 +204,9 @@ proc add*(e: NElem, child: NElem) =
   child.window = e.window
   e.children.add(child)
 
+# -----------------------------------------------------------------------------
+# Engine and Window
+# -----------------------------------------------------------------------------
 
 proc newEngine*(): Engine =
   new result
@@ -92,6 +245,8 @@ proc processWindowEvent(w: Window, ev: WindowEventPtr): EventResult =
   case ev.event:
     of WindowEvent_Shown, WindowEvent_Exposed, WindowEvent_Maximized,
         WindowEvent_Resized, WindowEvent_Restored, WindowEvent_SizeChanged:
+      let winSize = w.win.getSize
+      w.rootElem.rect.set((x: 0.cint, y: 0.cint, w: winSize.x, h: winSize.y))
       w.needsRedraw = true
       return erConsumed
     else:
