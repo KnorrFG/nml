@@ -2,8 +2,6 @@ import sdl2, constructor
 import os, sugar
 import geometry
 
-export color, Point
-
 
 # -----------------------------------------------------------------------------
 # utils

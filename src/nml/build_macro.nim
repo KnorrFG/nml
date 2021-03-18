@@ -110,7 +110,6 @@ proc elemsToAst(elems: seq[DslElem]): seq[NimNode] =
                        else:
                          e.parent.unsafeGet.ident.get
                      else: slot.signal.owner
-      echo slot.argname.treeRepr
       result.add Call("generateCallback", slot.argname,
                       slot.body.replaceSelf e.ident.get,
                       DotExpr(sigOwner, slot.signal.name))
@@ -125,7 +124,6 @@ macro generateCallback*(argname, body: untyped; signal: typed): untyped=
                                    IdentDefs(argname, typename, Empty())],
                            body=body)
     result = Call("add", DotExpr(signal, Ident"onchange"), procNode)
-    echo repr result
   else:
     error("Only a property can be slot, but type is: " & typeinst.repr)
 
@@ -150,16 +148,34 @@ proc parsePropertyBinding(n: NimNode, parent: Option[DslElem]): Slot =
   let pName = n.left
   if pName.kind != nnkIdent:
     error "Left of a <- must be an Identifier"
+  
+  func getSignalDesc(n: NimNode): auto = 
+    case n:
+      of Ident(strVal: @owner): (owner: owner.Ident, name: pName)
+      of DotExpr([@owner, @name]): (owner: owner, name: name)
+      else:
+        error("This should never happen")
+        (owner: Empty(), name: Empty())
 
   case n.right:
-    of Ident(strVal: "parent"):
-      echo "just parent"
-    of DotExpr([@owner, @name]):
-      echo owner, " ", name
+    of Ident() | DotExpr():
+      Slot(signal: n.right.getSignalDesc, argname: Ident"it",
+           body: StmtList(quote do: self.`pname`.set it))
     else:
-      echo "More complex:"
-      echo n.right.treeRepr
-
+      var source = Empty()
+      n.right.forNode(nnkPrefix, proc(x: auto): NimNode=
+        if x.name.strVal == "*":
+          source = x.argument
+          Ident"it"
+        else:
+          x)
+      if source == Empty():
+        error("Expression is missing a * to mark the source: \p" & n.right.repr)
+        Slot()
+      else:
+        Slot(signal: source.getSignalDesc, argname: Ident"it",
+             body: StmtList(superquote do: self.`pname`.set `n.right`))
+     
 
 proc parseSlot(n: NimNode): Slot =
   assert n.isSlot
@@ -213,22 +229,17 @@ proc fillInSymbols(elems: seq[DslElem]): seq[DslElem] =
         e
 
 
-#proc mkuiImpl(args: NimNode): NimNode =
 macro mkui*(args: varargs[untyped]): untyped =
   assert args.len >= 2
-  #echo args.treeRepr
   let 
     name = args[0]
     code = args[^1]
     ctor = newTree(nnkArglist, args[1 ..< ^1])
 
-  #echo code.treeRepr
   let elems = collect newSeq():
     for i, node in code:
       parseNElem(node, none(DslElem))
-  #echo "Output"
-  #let foo = typeDefinition(name, ctor, elems.concat.elemsToAst)
-  #echo foo.treerepr
+  
   let finalElems = fillInSymbols(elems.concat)
-  result = typeDefinition(name, ctor, elems.concat.elemsToAst)
+  result = typeDefinition(name, ctor, finalElems.elemsToAst)
 

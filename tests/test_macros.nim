@@ -3,7 +3,7 @@ import unittest
 import macroutils
 
 suite "Macro Internals":
-  test "1":
+  test "basic":
     mkui(Ui1, a: int):
       Rectangle:
         color color(0, 255, 255, 255)
@@ -29,30 +29,33 @@ suite "Macro Internals":
 # schwächer bindet als die dotexpression kann dann dafür 1. und 2. wieder
 # angewandt werden.
 
-  test "Anchors":
+  test "property bindings and slots":
     mkui(Ui1):
       Rectangle:
         color cWhite
+        rect <- parent
+
+      a = Rectangle:
+        color cBlack
+
+        size <- *parent / 2
+        center <- parent
+
+      Rectangle:
+        color cBlue
+        right <- a.left
+        centerY <- a
+        
         slot(s: parent.size):
-          self.size.set s
-
-        a = Rectangle:
-          color cBlack
-
-          slot(s: parent.size):
-            self.size.set s / 2
-          #size <- parent / 2
-          #center <- parent.center
-
-        Rectangle:
-          color cBlue
-          
-          slot(s: parent.size):
-            let sl = min(s.w, s.h) / 4
-            self.size.set size(sl, sl)
+          let sl = min(s.w, s.h) / 4
+          self.size.set size(sl, sl)
 
     let ui = newUi1()
-    let engine = newEngine()
-    engine.createWindow(800, 600, ui, "Test Window")
-    engine.run()
+    ui.rect.set rect(0, 0, 100, 100)
+
+    doAssert ui.children[0].rect.get() == rect(0, 0, 100, 100)
+    doAssert ui.children[1].size.get() == size(50, 50)
+    doAssert ui.children[1].center.get() == point(50, 50)
+    doAssert ui.children[2].right.get() == 25
+    doAssert ui.children[2].size.get() == point(25, 25)
 

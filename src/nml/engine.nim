@@ -137,7 +137,6 @@ proc initNElem*(me: NElem) =
     me.pos.onChange.invoke(me.pRect.pos)
     me.rect.onChange.invoke(me.pRect)
 
-
   me.center = initProperty[Point, EventPoint](
     proc(): Point = me.pRect.center, setCenter, true)
 
