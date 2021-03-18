@@ -51,12 +51,18 @@ type
   Point* = AbstractPoint[cint]
   Size* = AbstractSize[cint]
 
+proc point*(x, y: cint): Point = v(x, y)
+proc size*(w, h: cint): Size = v(w, h)
+proc rect*(x, y, w, h: cint): Rect = v(x, y, w, h)
+
 converter geomToSdl*(g: NVec[2, cint]): sdl2.Point = (x: g.x, y: g.y)
 converter geomToSdl*(g: NVec[4, cint]): sdl2.Rect =
   (x: g.x, y: g.y, w: g.w, h: g.h)
 
 converter sdlToGeom*(r: sdl2.Rect): NVec[4, cint] = v(r.x, r.y, r.w, r.h)
 converter sdlToGeom*(r: sdl2.Point): NVec[2, cint] = v(r.x, r.y)
+
+converter anyToCint*[T: SomeNumber](x: T): cint = x.cint
 
 # -----------------------------------------------------------------------------
 # Property

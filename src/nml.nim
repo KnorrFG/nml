@@ -8,3 +8,4 @@ export color,
 type
   Point* = core.Point
   Rect* = core.Rect
+

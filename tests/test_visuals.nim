@@ -41,11 +41,10 @@ suite "Basics":
     proc setTmp2CenterY(cy: cint) = tmp2.centerY.set cy
     a.centerY.onChange.add setTmp2CenterY
     
-    proc setTmp2Size(h: cint) =
-      let s = cint(min(tmp1.w.get(), tmp1.h.get()) / 4)
-      tmp2.size.set v(s, s)
-    tmp1.w.onChange.add setTmp2Size
-    tmp1.h.onChange.add setTmp2Size
+    proc setTmp2Size(s: Size) =
+      let ms = min(s.w, s.h) / 4
+      tmp2.size.set size(ms, ms)
+    tmp1.size.onChange.add setTmp2Size
 
     engine.createWindow(800, 600, tmp1, "Test Window")
     engine.run()

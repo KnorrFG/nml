@@ -7,13 +7,21 @@ type NVec*[N: static[int], T] = object
 proc initNVec*[N: static[int], T](vals: array[N, T]): NVec[N, T] =
   result.data = vals
 
+proc initNVec*[N: static[int], T](val: T): NVec[N, T] =
+  for i in 0 ..< N:
+    result.data[i] = val
+
+# converter scalarToVec*[N: static[int], T](s: T): NVec[N, T] = initNVec(s)
+
 macro v*(data: varargs[typed]): untyped =
-  Call(newTree(nnkBracketExpr, Ident"initNVec", Lit data.len, data[0].gettype), data)
+  Call(newTree(nnkBracketExpr, Ident"initNVec", Lit data.len, data[0].gettype),
+       data)
   
 
 proc `[]`*[N, T, IT](v: NVec[N, T], index: IT): T = v.data[index]
 proc `[]=`*[N, T, IT](v: var NVec[N, T], index: IT, val: T) = v.data[index] = val
   
+
 proc `&`*[N1, N2: static[int],  T](v1: NVec[N1, T], v2: NVec[N2, T]):
     NVec[N1 + N2, T] =
   for i in 0 ..< N1:
@@ -22,12 +30,21 @@ proc `&`*[N1, N2: static[int],  T](v1: NVec[N1, T], v2: NVec[N2, T]):
     result[i + N1] = v2[i]
 
 
-proc `+`*[N, T](v: NVec[N, T], val: T): NVec[N, T] = v(v.data.mapIt it + val)
-proc `-`*[N, T](v: NVec[N, T], val: T): NVec[N, T] = v(v.data.mapIt it - val)
-proc `*`*[N, T](v: NVec[N, T], val: T): NVec[N, T] = v(v.data.mapIt it * val)
-proc `/`*[N, T](v: NVec[N, T], val: T): NVec[N, T] =
-  for i, x in v.data:
-    result[i] = T(x / val)
+# this isnt ideal, as the type of intvec/2 should actually be floatvec, but for
+# this lib its handy if the first operand determines the result type
+template raiseOperator(op: untyped): untyped =
+  proc op*[N, T, T2](v: NVec[N, T], val: T2): NVec[N, T] =
+    for i, x in v.data:
+      result.data[i] = op(x, val).T
+
+  proc op*[N, T, T2](v1: NVec[N, T], v2: NVec[N, T2]): NVec[N, T] =
+    for i, (x1, x2) in zip(v1.data, v2.data):
+      result.data[i] = op(v1, v2).T
+
+raiseOperator `+`
+raiseOperator `-`
+raiseOperator `*`
+raiseOperator `/`
 
 type
   AbstractRect*[T] = NVec[4, T]

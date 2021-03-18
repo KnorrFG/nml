@@ -1,15 +1,26 @@
 import sdl2 except rect
 import core, engine, geometry
+import sugar
 
 
 # -----------------------------------------------------------------------------
 # NElem Impls
 # -----------------------------------------------------------------------------
 
-type Rectangle* = ref object of NElem
-  color*: Color
+defineEvent Color
 
-addNew Rectangle
+type Rectangle* = ref object of NElem
+  pColor: Color
+  color*: Property(Color)
+
+proc newRectangle*(): Rectangle =
+  new result
+  result.initNElem()
+
+  let me = result
+  result.color = initProperty[Color, EventColor](proc(): Color = me.pColor,
+                                                 proc(c: Color) = me.pcolor = c)
+
 
 method draw*(r: Rectangle, parentRect: core.Rect, renderer: RendererPtr) =
   let 
@@ -20,7 +31,7 @@ method draw*(r: Rectangle, parentRect: core.Rect, renderer: RendererPtr) =
     targetSize = if innerSize == defaultRect.size: parentRect.size
                  else: innerSize
     targetRect: sdl2.Rect = targetPos & targetSize
-  renderer.setDrawColor r.color
+  renderer.setDrawColor r.pColor
   renderer.fillRect unsafeAddr targetRect
 
   for c in r.children:
