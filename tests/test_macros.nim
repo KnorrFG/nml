@@ -29,33 +29,48 @@ suite "Macro Internals":
 # schwächer bindet als die dotexpression kann dann dafür 1. und 2. wieder
 # angewandt werden.
 
-  test "property bindings and slots":
-    mkui(Ui1):
-      Rectangle:
-        color cWhite
-        rect <- parent
+from constructor import event
 
-      a = Rectangle:
-        color cBlack
+event FooEvent, int, char
+event Event
 
-        size <- *parent / 2
-        center <- parent
+var 
+  fooEvent = FooEvent()
+  arglessEvent = Event()
 
-      Rectangle:
-        color cBlue
-        right <- a.left
-        centerY <- a
-        
-        slot(s: parent.size):
-          let sl = min(s.w, s.h) / 4
-          self.size.set size(sl, sl)
+test "property bindings and slots":
+  mkui(Ui1):
+    Rectangle:
+      color cWhite
+      rect <- parent
 
-    let ui = newUi1()
-    ui.rect.set rect(0, 0, 100, 100)
+    a = Rectangle:
+      color cBlack
 
-    doAssert ui.children[0].rect.get() == rect(0, 0, 100, 100)
-    doAssert ui.children[1].size.get() == size(50, 50)
-    doAssert ui.children[1].center.get() == point(50, 50)
-    doAssert ui.children[2].right.get() == 25
-    doAssert ui.children[2].size.get() == point(25, 25)
+      size <- *parent / 2
+      center <- parent
+
+    Rectangle:
+      color cBlue
+      right <- a.left
+      centerY <- a
+      
+      slot fooEvent(i, c):
+        discard
+
+      slot arglessEvent():
+        discard
+
+      slot parent.size(s):
+        let sl = min(s.w, s.h) / 4
+        self.size.set size(sl, sl)
+
+  let ui = newUi1()
+  ui.rect.set rect(0, 0, 100, 100)
+
+  doAssert ui.children[0].rect.get() == rect(0, 0, 100, 100)
+  doAssert ui.children[1].size.get() == size(50, 50)
+  doAssert ui.children[1].center.get() == point(50, 50)
+  doAssert ui.children[2].right.get() == 25
+  doAssert ui.children[2].size.get() == point(25, 25)
 

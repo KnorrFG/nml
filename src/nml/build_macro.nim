@@ -1,5 +1,5 @@
 import macros except name
-import macroutils, constructor, sugar, sequtils, options
+import macroutils, constructor, sugar, sequtils, options, strutils, strformat
 import core, engine
 import fusion / matching
 
@@ -7,8 +7,8 @@ import fusion / matching
 
 type 
   Slot = ref object
-    signal: tuple[owner, name: NimNode]
-    argname, body: NimNode
+    signal, body: NimNode
+    argnames: seq[NimNode]
   DslElem = ref object
     elemType: NimNode
     parent: Option[DslElem]
@@ -90,6 +90,25 @@ proc replaceSelf(n: NimNode, self: NimNode): NimNode =
   n.forNode(nnkIdent, (node) => (if node.strVal == "self": self else: node))
 
 
+proc startsWithParent(n: NimNode): bool =
+  ## returns true if the leftmost identifier in a dotexpression is "parent"
+  if n.kind == nnkIdent:
+    return n.strVal == "parent"
+  elif n.kind == nnkDotExpr:
+    return n[0].startsWithParent
+  else:
+    error("Invalid node encoutered: " & n.repr)
+
+
+proc replaceLeftMostIdentWith(n: NimNode, replacement: NimNode): NimNode =
+  if n.kind == nnkDotExpr:
+    return DotExpr(n[0].replaceLeftMostIdentWith(replacement), n[1])
+  elif n.kind == nnkIdent:
+    return replacement
+  else:
+    error("Invalid node encoutered: " & n.repr)
+
+
 proc elemsToAst(elems: seq[DslElem]): seq[NimNode] =
   ## generates var statement + elem.toAst
   let varContents = collect newSeq():
@@ -104,28 +123,66 @@ proc elemsToAst(elems: seq[DslElem]): seq[NimNode] =
   # created below
   for e in elems:
     for slot in e.slots:
-      let sigOwner = if slot.signal.owner.strVal == "parent":
-                       if e.parent.isNone:
-                         Ident"result"
-                       else:
-                         e.parent.unsafeGet.ident.get
-                     else: slot.signal.owner
-      result.add Call("generateCallback", slot.argname,
-                      slot.body.replaceSelf e.ident.get,
-                      DotExpr(sigOwner, slot.signal.name))
+      #echo "foo: " & slot.signal.repr
+      #echo "foo: " & slot.signal.treerepr
+      let signal = if slot.signal.startsWithParent:
+                     if e.parent.isNone:
+                       slot.signal.replaceLeftMostIdentWith(Ident"result")
+                     else:
+                       slot.signal.replaceLeftMostIdentWith(
+                         e.parent.unsafeGet.ident.get)
+                   else: slot.signal
+      #echo "bar: " & signal.repr
+      #echo "slot.argnames: " & slot.argnames.repr
+      result.add Call("generateCallback",
+                      Prefix(bindSym"@", Bracket(slot.argnames)),
+                      slot.body.replaceSelf e.ident.get, signal)
+      #echo "call: " & result[^1].repr
 
 
-macro generateCallback*(argname, body: untyped; signal: typed): untyped=
-  assert argname.kind == nnkIdent and body.kind == nnkStmtList
+macro generateCallback*(argnames, body: untyped; signal: typed): untyped=
+  assert argnames.matches(Prefix[_, Bracket()]) and
+      body.kind == nnkStmtList
+  #echo "argnames: " & argnames.repr
+  let argnames = argnames[1]
   let typeinst = signal.getTypeInst
-  if typeinst.matches(
-      BracketExpr[Sym(strVal: "PropertyT"), @typename, _]):
-    let procNode = newProc(params=[Empty(),
-                                   IdentDefs(argname, typename, Empty())],
-                           body=body)
-    result = Call("add", DotExpr(signal, Ident"onchange"), procNode)
-  else:
-    error("Only a property can be slot, but type is: " & typeinst.repr)
+  case typeinst:
+    of BracketExpr[Sym(strVal: "PropertyT"), @typename, _]:
+      # its a property, get the onchange event
+      if not argnames.len == 1:
+        error(unindent"""for a property slot, there must be exactly one argname, 
+                         but there are: """ &
+                         argnames.toSeq.mapIt(it.repr).join(", "))
+      let procnode = newproc(params=[Empty(),
+                                     IdentDefs(argnames[0], typename, Empty())],
+                             body=body)
+      return Call("add", DotExpr(signal, ident"onchange"), procnode)
+    of Sym():
+      # its an even, get the signature from the typedef
+      let 
+        impl = typeinst.getimpl
+        base = impl.typ.inherits
+      if not base.matches(OfInherit[Sym(strVal: "EventBase")]):
+        break
+      let params = macroutils.body(impl[2])[0][1][2][0]
+      echo params.treeRepr
+      if params.len != argnames.len + 1:
+        error("provided number of argument does not fit event " &
+            fmt"{argnames.len} given, and {params.len - 1} required")
+
+      let 
+        renamedArgs = collect newSeq():
+          for (sigDef, name) in zip(params[1..^1], argnames.toSeq):
+            IdentDefs(name, sigDef[1], Empty())
+        newParams = @[Empty()] & renamedArgs
+        procnode = newproc(params=newParams, body=body)
+      return Call("add", signal, procnode)
+    else:
+      discard
+
+  error(
+    "Only a property or an Even can be connected to a slot, but type is: " &
+    signal.getTypeInst.repr)
 
 
 # -----------------------------------------------------------------------------
@@ -134,9 +191,12 @@ macro generateCallback*(argname, body: untyped; signal: typed): untyped=
 proc isNElemDecl(n: NimNode): bool =
   n.matches Call[Ident(), StmtList()] | Asgn[Ident(), Call[Ident(), StmtList()]]
 
-proc isConfig(n: NimNode): bool = n.kind == nnkCommand
+proc isConfig(n: NimNode): bool = n.kind == nnkCommand and n[0].strVal != "slot"
 proc isSlot(n: NimNode): bool =
-  n.matches Call[ObjConstr[Ident(strVal: "slot"), _], StmtList()]
+  #n.matches Call[ObjConstr[Ident(strVal: "slot"), _], StmtList()]
+  n.matches:
+    Command[Ident(strVal: "slot"), Call(), StmtList()] |
+    Command[Ident(strVal: "slot"), Ident() | DotExpr(), StmtList()]
 
 proc isPropertyBinding(n: NimNode): bool =
   n.kind == nnkInfix and n.name.strVal == "<-"
@@ -149,17 +209,16 @@ proc parsePropertyBinding(n: NimNode, parent: Option[DslElem]): Slot =
   if pName.kind != nnkIdent:
     error "Left of a <- must be an Identifier"
   
-  func getSignalDesc(n: NimNode): auto = 
+  func getSignal(n: NimNode): NimNode =
     case n:
-      of Ident(strVal: @owner): (owner: owner.Ident, name: pName)
-      of DotExpr([@owner, @name]): (owner: owner, name: name)
+      of @owner is Ident():
+        DotExpr(owner, pName)
       else:
-        error("This should never happen")
-        (owner: Empty(), name: Empty())
+        n
 
   case n.right:
     of Ident() | DotExpr():
-      Slot(signal: n.right.getSignalDesc, argname: Ident"it",
+      Slot(signal: n.right.getSignal, argnames: @[Ident"it"],
            body: StmtList(quote do: self.`pname`.set it))
     else:
       var source = Empty()
@@ -173,20 +232,43 @@ proc parsePropertyBinding(n: NimNode, parent: Option[DslElem]): Slot =
         error("Expression is missing a * to mark the source: \p" & n.right.repr)
         Slot()
       else:
-        Slot(signal: source.getSignalDesc, argname: Ident"it",
+        Slot(signal: source.getSignal, argnames: @[Ident"it"],
              body: StmtList(superquote do: self.`pname`.set `n.right`))
      
 
+func parseSignalNode(n: NimNode): tuple[owner, name: NimNode] =
+  if n.kind == nnkIdent:
+    return (owner: Ident"self", name: n)
+
+  var 
+    root = n.copyNimTree
+    lastNode = root
+    currentNode = lastNode[1]
+    name = Empty()
+
+  while true:
+    if currentNode.kind != nnkIdent:
+      assert currentNode.kind == nnkDotExpr
+      lastNode = currentNode
+      currentNode = currentNode[1]
+    else:
+      assert currentNode.kind == nnkIdent
+      lastNode = lastNode[0]
+      name = currentNode
+      break
+
+  (owner: root, name: name)
+
+
 proc parseSlot(n: NimNode): Slot =
   assert n.isSlot
-  Call[
-    ObjConstr[
-      Ident(strVal: "slot"),
-      ExprColonExpr[ Ident(strVal: @argname), DotExpr[@sigowner, @signame]]],
-    @body] := n
 
-  Slot(signal: (owner: sigowner, name: signame), argname: argname.Ident, 
-       body: body)
+  Command[Ident(strVal: "slot"), 
+    Call[@signal, all @argnames], @body is StmtList()] |
+  Command[Ident(strVal: "slot"), 
+    @signal is (Ident() | DotExpr()), @body is StmtList()] := n
+
+  Slot(signal: signal, argnames: argnames, body: body)
 
 
 proc parseNElem(n: NimNode, parent: Option[DslElem]): seq[DslElem] =
@@ -210,7 +292,8 @@ proc parseNElem(n: NimNode, parent: Option[DslElem]): seq[DslElem] =
     elif entry.isPropertyBinding:
       result[0].slots.add(entry.parsePropertyBinding parent)
     else:
-        error "Invalid DSL element encountered: " & entry.repr
+      error "Invalid DSL element encountered: \penty:\p" & entry.repr &
+        "\pbody:\p" & body.mapIt(it.repr).join("\p")
 
 
 # -----------------------------------------------------------------------------
