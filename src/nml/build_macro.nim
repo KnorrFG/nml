@@ -1,9 +1,12 @@
 import macros except name
-import macroutils, constructor, sugar, sequtils, options, strutils, strformat
+import macroutils, sugar, sequtils, options, strutils, strformat,
+  tables, sets
 import core, engine
 import fusion / matching
 
 {.experimental: "caseStmtMacros".}
+
+using n: NimNode
 
 type 
   Slot = ref object
@@ -15,13 +18,93 @@ type
     ident: Option[NimNode]
     config: seq[tuple[name, val: NimNode]]
     slots: seq[Slot]
-
-DslElem.construct false:
-  (parent, elemType): required
-  ident: none(NimNode)
-  config = @[]
+  ForwardingDecl = ref object
+    name: NimNode
+    target: NimNode
 
 
+proc newDslElem(parent: Option[DslElem], elemType: NimNode,
+                ident = none(NimNode),
+                config: seq[tuple[name, val: NimNode]] = @[]): DslElem =
+  DslElem(elemType: elemType, parent: parent, ident: ident, config: config)
+
+
+# -----------------------------------------------------------------------------
+# My Macro Utils
+# -----------------------------------------------------------------------------
+
+proc leftMostIdent(n): NimNode =
+  ## in a chain of DotExpr, get the leftmost identifier
+  if n.kind == nnkIdent:
+    return n
+  elif n.kind == nnkDotExpr:
+    return n[0].leftMostIdent
+  else:
+    error("Invalid node encoutered: " & n.repr)
+
+
+proc replaceLeftMostIdentWith(n: NimNode, replacement: NimNode): NimNode =
+  if n.kind == nnkDotExpr:
+    return DotExpr(n[0].replaceLeftMostIdentWith(replacement), n[1])
+  elif n.kind == nnkIdent:
+    return replacement
+  else:
+    error("Invalid node encoutered: " & n.repr)
+
+
+proc derefIfNeeded(n): NimNode=
+  ## If a type is defined like this: type Foo = ref FooObj
+  ## this ref is resolved and FooObjs impl is returned, otherwise n is returned
+  case n:
+    of TypeDef[_, Empty(), RefTy[@actualType is Sym()]]:
+      # this is the case where a ref type is only defined as ref to an already
+      # defined non ref type
+      return actualType.getImpl
+    else:
+      return n
+
+
+proc getParentType(n): Option[NimNode] =
+  case n.derefIfNeeded:
+    of TypeDef[_, _, RefTy[ObjectTy[_, OfInherit[@parentSym] | Empty(), _]]]:
+      return parentSym
+    else:
+      error(
+        "unsupported node Type (currently only ref types are supported):\p" &
+        n.treeRepr)
+
+
+proc getFields(n): seq[NimNode] =
+  ## returns a list of IdentDefs that were defined for the type that is
+  ## represented by n. n is supposed to be a TypeDef
+  case n.derefIfNeeded:
+    of TypeDef[_, _, RefTy[ObjectTy[_, _, RecList[all @fields] | Empty()]]|
+                           ObjectTy[_, _, RecList[all @fields] | Empty()]]:
+      return fields
+    else:
+      error("unsupported node Type :\p" & n.treeRepr)
+
+
+proc getFieldsRecursive(n): seq[NimNode] =
+  ## same as getFields, but also returns all fields of all parent types
+  let 
+    parentType = n.getParentType
+    parentFields = if parentType.isSome:
+                     parentType.unsafeGet.getImpl.getFields
+                   else:
+                     @[]
+
+  n.getFields & parentFields
+
+
+proc dotPrepend(n, prependee: NimNode): NimNode =
+  case n:
+    of Ident():
+      return DotExpr(prependee, n)
+    of DotExpr[@l, @r]:
+      return DotExpr(l.dotPrepend(prependee), r)
+    else:
+      error("Invalid node type:\p" & n.treeRepr)
 # -----------------------------------------------------------------------------
 # Code Generation
 # -----------------------------------------------------------------------------
@@ -45,17 +128,25 @@ proc toIdentDefs(n: NimNode): seq[NimNode] =
 
 
 proc typeDefinition(name: NimNode, ctorSig: NimNode,
-                    code: seq[NimNode]): NimNode =
+                    code: seq[NimNode], members: seq[NimNode]):
+    NimNode =
   let procName = ident("new" & name.strVal)
   let body = @[
     Command("new", Ident"result"),
     Call("initNElem", Ident"result")] & code
+
+  # The members are the definition for the forwarded fields, they go somewhere
+  # here:
   result = StmtList(
     TypeSection(
       TypeDef(
         name,
         Empty(),
-        RefTy(ObjectTy(Empty(), OfInherit(Ident"NElem"), Empty())))),
+        RefTy(
+          ObjectTy(
+            Empty(),
+            OfInherit(Ident"NElem"),
+            RecList(members))))),
     ProcDef(
       procName,
       Empty(),
@@ -92,21 +183,7 @@ proc replaceSelf(n: NimNode, self: NimNode): NimNode =
 
 proc startsWithParent(n: NimNode): bool =
   ## returns true if the leftmost identifier in a dotexpression is "parent"
-  if n.kind == nnkIdent:
-    return n.strVal == "parent"
-  elif n.kind == nnkDotExpr:
-    return n[0].startsWithParent
-  else:
-    error("Invalid node encoutered: " & n.repr)
-
-
-proc replaceLeftMostIdentWith(n: NimNode, replacement: NimNode): NimNode =
-  if n.kind == nnkDotExpr:
-    return DotExpr(n[0].replaceLeftMostIdentWith(replacement), n[1])
-  elif n.kind == nnkIdent:
-    return replacement
-  else:
-    error("Invalid node encoutered: " & n.repr)
+  n.leftMostIdent.strVal == "parent"
 
 
 proc elemsToAst(elems: seq[DslElem]): seq[NimNode] =
@@ -134,10 +211,43 @@ proc elemsToAst(elems: seq[DslElem]): seq[NimNode] =
                    else: slot.signal
       #echo "bar: " & signal.repr
       #echo "slot.argnames: " & slot.argnames.repr
+      #I cannot pass the signal as typed because it will not be valid if its a
+      #local signal, But I cannot pass it as untyped, because then i cant do a
+      #type look up, i need a second macro, that will just complete a local
+      #signal, if it is one, and pass the result to generate callback
+      
+      let completeSignalCall = Call("completeLocalSignal", signal, e.ident.get,
+                                    e.elemType)
       result.add Call("generateCallback",
                       Prefix(bindSym"@", Bracket(slot.argnames)),
-                      slot.body.replaceSelf e.ident.get, signal)
+                      slot.body.replaceSelf e.ident.get, completeSignalCall)
       #echo "call: " & result[^1].repr
+
+
+proc nameFromDef(n): string=
+  case n:
+    of Ident(strVal: @name) |
+       Postfix[Ident(strVal: "*"), Ident(strVal: @name)]:
+      return name.get
+    else:
+      error("Invalid node:\p" & n.treeRepr)
+
+
+proc namesFromIdentDef(n): seq[string] =
+  if n.kind == nnkIdentDefs:
+    return n[0 ..< ^2].map(nameFromDef)
+  else:
+    error("Invalid node:\p" & n.treeRepr)
+
+
+macro completeLocalSignal*(signal, potentialOwner: untyped, elemType: typed): 
+    untyped=
+  let fields = elemType.getImpl.getFieldsRecursive.map(namesFromIdentDef).
+    concat.toHashSet
+  if signal.leftMostIdent.strVal in fields:
+    signal.dotPrepend(potentialOwner)
+  else:
+    signal
 
 
 macro generateCallback*(argnames, body: untyped; signal: typed): untyped=
@@ -161,11 +271,10 @@ macro generateCallback*(argnames, body: untyped; signal: typed): untyped=
       # its an even, get the signature from the typedef
       let 
         impl = typeinst.getimpl
-        base = impl.typ.inherits
+        base = impl.typ[0].inherits
       if not base.matches(OfInherit[Sym(strVal: "EventBase")]):
         break
-      let params = macroutils.body(impl[2])[0][1][2][0]
-      echo params.treeRepr
+      let params = macroutils.body(impl[2][0])[0][1][2][0]
       if params.len != argnames.len + 1:
         error("provided number of argument does not fit event " &
             fmt"{argnames.len} given, and {params.len - 1} required")
@@ -185,21 +294,61 @@ macro generateCallback*(argnames, body: untyped; signal: typed): untyped=
     signal.getTypeInst.repr)
 
 
+proc getMemberDefs(forwardings: seq[ForwardingDecl], elems: seq[DslElem]):
+    seq[NimNode] =
+  ## generates the fields for a ui-type that are defined in a forward section
+  let elemDict = elems.mapIt((it.ident.get.strVal, it)).toTable
+  for fwd in forwardings:
+    let target = fwd.target.leftMostIdent.strVal
+    if target in elemDict:
+      let 
+        targetType = elemDict[target].elemType
+        expr = fwd.target.replaceLeftMostIdentWith(targetType)
+      result.add(IdentDefs(
+        Postfix("*",  fwd.name),
+        Call("typeof", expr),
+        Empty()))
+    else:
+      error(target & " is undefined")
+
+
+proc makeAsgnStmts(forwardings: seq[ForwardingDecl]): seq[NimNode] =
+  ## asigns the local variables of the children to the type fields for element
+  ## forwarding
+  for fwd in forwardings:
+    result.add Asgn(DotExpr(Ident("result"), fwd.name), fwd.target)
+
+
 # -----------------------------------------------------------------------------
 # Parsing
 # -----------------------------------------------------------------------------
 proc isNElemDecl(n: NimNode): bool =
-  n.matches Call[Ident(), StmtList()] | Asgn[Ident(), Call[Ident(), StmtList()]]
+  if n.matches Call[Ident(strVal: @typename), StmtList()] |
+                    Asgn[Ident(), Call[Ident(), StmtList()]]:
+    if typename.isSome() and typename.get[0].isLowerAscii():
+      return false
+    else:
+      return true
+  return false
 
 proc isConfig(n: NimNode): bool = n.kind == nnkCommand and n[0].strVal != "slot"
 proc isSlot(n: NimNode): bool =
-  #n.matches Call[ObjConstr[Ident(strVal: "slot"), _], StmtList()]
   n.matches:
     Command[Ident(strVal: "slot"), Call(), StmtList()] |
     Command[Ident(strVal: "slot"), Ident() | DotExpr(), StmtList()]
 
 proc isPropertyBinding(n: NimNode): bool =
-  n.kind == nnkInfix and n.name.strVal == "<-"
+  n.kind == nnkInfix and macroutils.name(n).strVal == "<-"
+
+proc isForwardSection(n): bool =
+  n.matches Call[Ident(strVal: "forward"), StmtList()]
+
+proc parseForwardSection(n): seq[ForwardingDecl] =
+  assert n.isForwardSection
+  collect newSeq():
+    for entry in n[1]:
+      assert entry.kind == nnkAsgn
+      ForwardingDecl(name: entry.left, target:entry.right)
 
 
 proc parsePropertyBinding(n: NimNode, parent: Option[DslElem]): Slot =
@@ -236,36 +385,12 @@ proc parsePropertyBinding(n: NimNode, parent: Option[DslElem]): Slot =
              body: StmtList(superquote do: self.`pname`.set `n.right`))
      
 
-func parseSignalNode(n: NimNode): tuple[owner, name: NimNode] =
-  if n.kind == nnkIdent:
-    return (owner: Ident"self", name: n)
-
-  var 
-    root = n.copyNimTree
-    lastNode = root
-    currentNode = lastNode[1]
-    name = Empty()
-
-  while true:
-    if currentNode.kind != nnkIdent:
-      assert currentNode.kind == nnkDotExpr
-      lastNode = currentNode
-      currentNode = currentNode[1]
-    else:
-      assert currentNode.kind == nnkIdent
-      lastNode = lastNode[0]
-      name = currentNode
-      break
-
-  (owner: root, name: name)
-
-
 proc parseSlot(n: NimNode): Slot =
   assert n.isSlot
 
-  Command[Ident(strVal: "slot"), 
+  Command[Ident(strVal: "slot"),
     Call[@signal, all @argnames], @body is StmtList()] |
-  Command[Ident(strVal: "slot"), 
+  Command[Ident(strVal: "slot"),
     @signal is (Ident() | DotExpr()), @body is StmtList()] := n
 
   Slot(signal: signal, argnames: argnames, body: body)
@@ -292,7 +417,7 @@ proc parseNElem(n: NimNode, parent: Option[DslElem]): seq[DslElem] =
     elif entry.isPropertyBinding:
       result[0].slots.add(entry.parsePropertyBinding parent)
     else:
-      error "Invalid DSL element encountered: \penty:\p" & entry.repr &
+      error "Invalid DSL element encountered: \pentry:\p" & entry.repr &
         "\pbody:\p" & body.mapIt(it.repr).join("\p")
 
 
@@ -319,10 +444,23 @@ macro mkui*(args: varargs[untyped]): untyped =
     code = args[^1]
     ctor = newTree(nnkArglist, args[1 ..< ^1])
 
-  let elems = collect newSeq():
-    for i, node in code:
-      parseNElem(node, none(DslElem))
+  var 
+    elems: seq[DslElem]
+    forwardings: seq[ForwardingDecl]
+
+  for node in code:
+    if node.isForwardSection:
+      forwardings.add(node.parseForwardSection)
+    elif node.isNElemDecl:
+      elems.add parseNElem(node, none(DslElem))
+    else:
+      error("Invalid Top level elem:\p" & node.treeRepr)
   
-  let finalElems = fillInSymbols(elems.concat)
-  result = typeDefinition(name, ctor, finalElems.elemsToAst)
+  let 
+    finalElems = fillInSymbols(elems.concat)
+    memberDefs = getMemberDefs(forwardings, finalElems)
+
+  result = typeDefinition(name, ctor,
+                          finalElems.elemsToAst & forwardings.makeAsgnStmts,
+                          memberDefs)
 

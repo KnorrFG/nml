@@ -53,3 +53,34 @@ m(ui1, contr: MailControler):
 
 The model is then supposed to inherit from a yet to be specified class, which
 will automatically handle changes in the data
+# Roadmap
+## DSL Features
+- [x] elems
+- [x] properties
+- [x] slots
+- [x] property bindings
+- [x] self-slot syntax
+     This means, that if a button has a onClick method, the slot can be defined
+     in the button nelem like a child element, but its distinguishable because
+     the name is known
+- [ ] method definitions 
+- [ ] custom signals
+- [x] signal forwarding
+- [ ] Animations and states
+- [ ] App macro, that supports a window command, so that multi window apps
+    become easier
+
+## Prime Elems
+- [x] Mouse Area
+- [ ] Text Display
+- [ ] Text Input
+- [ ] Layouts
+- [ ] Arcs
+- [ ] Polygons
+- [ ] Image display
+- [ ] Drawing Area
+- [ ] Separater Fill and border for rects
+- [ ] ListView
+
+## Misc
+- [ ] css colors

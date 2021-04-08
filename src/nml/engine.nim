@@ -1,6 +1,6 @@
 import core, geometry
 import sdl2 except rect, Rect, Point
-
+import times
 
 type 
   Point = core.Point
@@ -87,23 +87,23 @@ proc initNElem*(me: NElem) =
     me.center.onChange.invoke(me.pRect.center)
     me.rect.onChange.invoke(me.pRect)
 
-  me.x = initProperty[cint, EventCint](proc(): cint = me.pRect.x, setX, true)
-  me.y = initProperty[cint, EventCint](proc(): cint = me.pRect.y, setY, true)
-  me.w = initProperty[cint, EventCint](proc(): cint = me.pRect.w, setW, true)
-  me.h = initProperty[cint, EventCint](proc(): cint = me.pRect.h, setH, true)
+  me.x = newProperty[cint, EventCint](proc(): cint = me.pRect.x, setX, true)
+  me.y = newProperty[cint, EventCint](proc(): cint = me.pRect.y, setY, true)
+  me.w = newProperty[cint, EventCint](proc(): cint = me.pRect.w, setW, true)
+  me.h = newProperty[cint, EventCint](proc(): cint = me.pRect.h, setH, true)
 
   proc setRight(nr: cint) = me.x.set nr - me.pRect.w
   proc setBottom(nb: cint) = me.y.set nb - me.pRect.h
   proc setCenterX(cx: cint) = me.x.set cx - cint(me.pRect.w/ 2)
   proc setCenterY(cy: cint) = me.y.set cy - cint(me.pRect.h/ 2)
 
-  me.right = initProperty[cint, EventCint](
+  me.right = newProperty[cint, EventCint](
     proc(): cint = me.pRect.right, setRight, true)
-  me.bottom = initProperty[cint, EventCint](
+  me.bottom = newProperty[cint, EventCint](
     proc(): cint = me.pRect.bottom, setBottom, true)
-  me.centerX = initProperty[cint, EventCint](
+  me.centerX = newProperty[cint, EventCint](
     proc(): cint = me.pRect.centerX, setCenterX, true)
-  me.centerY = initProperty[cint, EventCint](
+  me.centerY = newProperty[cint, EventCint](
     proc(): cint = me.pRect.centerY, setCenterY, true)
 
   proc setSize(size: Size) =
@@ -121,7 +121,7 @@ proc initNElem*(me: NElem) =
     me.center.onChange.invoke(me.pRect.center)
     me.rect.onChange.invoke(me.pRect)
 
-  me.size = initProperty[Size, EventSize](
+  me.size = newProperty[Size, EventSize](
     proc(): Size = me.pRect.size, setSize, true)
 
   proc setCenter(c: Point) =
@@ -137,7 +137,7 @@ proc initNElem*(me: NElem) =
     me.pos.onChange.invoke(me.pRect.pos)
     me.rect.onChange.invoke(me.pRect)
 
-  me.center = initProperty[Point, EventPoint](
+  me.center = newProperty[Point, EventPoint](
     proc(): Point = me.pRect.center, setCenter, true)
 
   proc setPos(p: Point) =
@@ -153,7 +153,7 @@ proc initNElem*(me: NElem) =
     me.pos.onChange.invoke(me.pRect.pos)
     me.rect.onChange.invoke(me.pRect)
 
-  me.pos = initProperty[Point, EventPoint](
+  me.pos = newProperty[Point, EventPoint](
     proc(): Point = me.pRect.pos, setPos, true)
 
   proc setRect(r: Rect) =
@@ -171,7 +171,7 @@ proc initNElem*(me: NElem) =
     me.pos.onChange.invoke(me.pRect.pos)
     me.rect.onChange.invoke(me.pRect)
 
-  me.rect = initProperty[Rect, EventRect](
+  me.rect = newProperty[Rect, EventRect](
     proc(): Rect = me.pRect, setRect, true)
 
 
@@ -240,6 +240,12 @@ proc redrawIfNecessary(w: Window) =
     w.draw()
 
 
+proc close*(w: Window) =
+  let ev = QuitEventObj(kind: QuitEvent, timestamp: getTime().toUnix.uint32)
+  if pushEvent(cast[ptr Event](ev.unsafeAddr)) != 1:
+    raise newException(NmlError, "Window.close: " & $getError())
+
+
 proc processWindowEvent(w: Window, ev: WindowEventPtr): EventResult =
   case ev.event:
     of WindowEvent_Shown, WindowEvent_Exposed, WindowEvent_Maximized,
@@ -265,17 +271,19 @@ proc processEvent(w: Window, ev: Event): EventResult =
       return w.rootElem.processEvent(ev)
 
 
-proc run*(e: Engine) =
+proc run*(e: var Engine) =
   var event: Event
-  block outer:
-    while true:
-      waitEvent(event).onFail:
-        raise newException(NmlError, "waitEvent: " & $getError())
-      for w in e.windows:
-        case w.processEvent event:
-          of erQuit: break outer
-          of erConsumed: break
-          of erIgnored: discard
+  while e.windows.len > 0:
+    waitEvent(event).onFail:
+      raise newException(NmlError, "waitEvent: " & $getError())
+    for i, w in e.windows:
+      case w.processEvent event:
+        of erQuit:
+          w.win.destroyWindow
+          e.windows.delete i
+          break
+        of erConsumed: break
+        of erIgnored: discard
 
-      for w in e.windows:
-        w.redrawIfNecessary()
+    for w in e.windows:
+      w.redrawIfNecessary()

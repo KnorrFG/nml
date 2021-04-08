@@ -1,5 +1,5 @@
-import sdl2, constructor
-import os, sugar
+import sdl2
+import os, sugar, macros
 import geometry
 
 
@@ -63,10 +63,51 @@ converter sdlToGeom*(r: sdl2.Point): NVec[2, cint] = v(r.x, r.y)
 converter anyToCint*[T: SomeNumber](x: T): cint = x.cint
 
 # -----------------------------------------------------------------------------
+# Event
+# -----------------------------------------------------------------------------
+
+type EventBase* = object of RootObj
+
+macro event*(args: varargs[untyped]): untyped =
+  let name = args[0]
+  var
+    procArgs = @[newEmptyNode()] #Holds the ident defs for formal params
+    argIdents: seq[NimNode]      #Holds the ident names
+  for i, arg in args[1..<args.len]:
+    let varName = ident("var" & $i) #Generated name for passing to the listeners
+    procArgs.add(newIdentDefs(varName, arg, newEmptyNode()))
+    argIdents.add(varName)
+
+
+  let
+    params = newNimNode(nnkFormalParams).add(procArgs)         #formal params
+    procTy = newNimNode(nnkProcTy).add(params).add(newEmptyNode()) #Generate proc type
+    exportedName = postfix(name, "*") #We always export the event cause we're dumb
+
+  result = newStmtList().add quote do:
+    type `exportedName` = ref object of EventBase
+      listeners: seq[`procTy`]
+    proc add*(evt: var `name`, newProc: `procTy`) =
+      let ind = evt.listeners.find(newProc)
+      if ind < 0: evt.listeners.add(newProc)
+
+    proc remove*(evt: var `name`, toRemove: `procTy`) =
+      let ind = evt.listeners.find(toRemove)
+      if ind >= 0: evt.listeners.delete(ind)
+
+  #Sometimes in our lives we all have things we need to borrow
+  #AST is sometimes easier than quoteDo
+  procArgs.insert(newIdentDefs(ident("evt"), name, newEmptyNode()), 1)
+  var procBody = newNimNode(nnkForStmt).add(ident("listen"), newDotExpr(ident(
+      "evt"), ident("listeners")), newStmtList().add(newCall(ident("listen"))))
+  procBody[2][0].add(argIdents)
+  let invokeProc = newProc(postfix(ident("invoke"), "*"), procArgs, procBody)
+  result.add(invokeProc)
+# -----------------------------------------------------------------------------
 # Property
 # -----------------------------------------------------------------------------
 
-type PropertyT*[ValT, EventT] = object
+type PropertyT*[ValT, EventT] = ref object
   ## A property *represents* a value, which can be updated, and inform about
   ## its change via callback. The lazy attribute determines whether a call to
   ## set will automatically produce this event or not. This is useful, because
@@ -78,7 +119,7 @@ type PropertyT*[ValT, EventT] = object
   set: proc(x: ValT)
   lazy: bool
 
-proc initProperty*[ValT, EventT](getter: () -> ValT,
+proc newProperty*[ValT, EventT](getter: () -> ValT,
                                  setter: proc(x: ValT),
                                  lazy = false):
     PropertyT[ValT, EventT] =
@@ -100,6 +141,7 @@ template Property*(typeName: untyped): untyped =
 template defineEvent*(typeName: untyped): untyped =
   event `Event typeName`, typeName
 
+event EventEmpty
 defineEvent cint
 defineEvent Rect
 defineEvent Point

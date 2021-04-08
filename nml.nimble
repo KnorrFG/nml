@@ -12,7 +12,6 @@ srcDir        = "src"
 requires "nim >= 1.4.4",
   "sdl2",
   "patty",
-  "constructor",
   "macroutils",
   "fusion"
 
