@@ -72,7 +72,11 @@ will automatically handle changes in the data
 
 ## Prime Elems
 - [x] Mouse Area
+  - [x] on click
+  - [x] pressStarted
+  - [x] pressEnded
 - [ ] Text Display
+- [ ] Flickable
 - [ ] Text Input
 - [ ] Layouts
 - [ ] Arcs

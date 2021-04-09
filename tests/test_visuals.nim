@@ -16,17 +16,18 @@ suite "Interactive":
     mkui(Ui1):
       Rectangle:
         color cBlack
-        rect <- parent
-      Rectangle:
+        size <- parent
+      r = Rectangle:
         color cWhite
         center <- parent
-        rect <- *parent / 6
+        size <- *parent / 6
 
         MouseArea:
           rect <- parent
           
-          slot onClicked:
-            self.window.close()
+          slot onLClick: echo "hi"
+          slot onLPress: r.color.set color(200, 200, 200, 255)
+          slot onLClickEnd: r.color.set cWhite
 
     engine.createWindow(800, 600, newUi1())
     engine.run()

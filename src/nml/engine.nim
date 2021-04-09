@@ -8,8 +8,9 @@ type
   Size = core.Size
   NElem* = ref NElemObj
   NElemObj = object of RootObj
+    parent*: NElem
     children*: seq[NElem]
-    window*: Window
+    pWindow: Window
     pRect: Rect
     x*, y*, w*, h*, right*, bottom*, centerX*, centerY*: Property(cint)
     # left and top are procs that return x and y
@@ -43,13 +44,16 @@ proc `=destroy`(x: var WindowObj) =
 # NElem
 # -----------------------------------------------------------------------------
 
-template addNew*(name: untyped) =
-  proc `new name`*(): name = 
-    new result
-    result.initNElem()
+proc window*(e: NElem): Window =
+  if e.parent.isNil: e.pWindow
+  else: e.parent.window
 
 
-#template makeScalarSetter(symbol)
+proc requireRedraw*(me: NElem) =
+  if not me.window.isNil and (not me.window.needsRedraw):
+    me.window.needsRedraw = true
+    
+
 proc initNElem*(me: NElem) =
   me.pRect = defaultRect
 
@@ -61,6 +65,7 @@ proc initNElem*(me: NElem) =
     me.center.onChange.invoke(me.pRect.center)
     me.pos.onChange.invoke(me.pRect.pos)
     me.rect.onChange.invoke(me.pRect)
+    me.requireRedraw
 
   proc setY(y: cint) =
     me.pRect.y = y
@@ -70,6 +75,7 @@ proc initNElem*(me: NElem) =
     me.center.onChange.invoke(me.pRect.center)
     me.pos.onChange.invoke(me.pRect.pos)
     me.rect.onChange.invoke(me.pRect)
+    me.requireRedraw
 
   proc setW(w: cint) =
     me.pRect.w = w
@@ -78,6 +84,7 @@ proc initNElem*(me: NElem) =
     me.centerX.onChange.invoke(me.pRect.centerX)
     me.center.onChange.invoke(me.pRect.center)
     me.rect.onChange.invoke(me.pRect)
+    me.requireRedraw
 
   proc setH(h: cint) =
     me.pRect.h = h
@@ -86,6 +93,7 @@ proc initNElem*(me: NElem) =
     me.centerY.onChange.invoke(me.pRect.centerY)
     me.center.onChange.invoke(me.pRect.center)
     me.rect.onChange.invoke(me.pRect)
+    me.requireRedraw
 
   me.x = newProperty[cint, EventCint](proc(): cint = me.pRect.x, setX, true)
   me.y = newProperty[cint, EventCint](proc(): cint = me.pRect.y, setY, true)
@@ -120,6 +128,7 @@ proc initNElem*(me: NElem) =
     me.centerY.onChange.invoke(me.pRect.centerY)
     me.center.onChange.invoke(me.pRect.center)
     me.rect.onChange.invoke(me.pRect)
+    me.requireRedraw
 
   me.size = newProperty[Size, EventSize](
     proc(): Size = me.pRect.size, setSize, true)
@@ -136,6 +145,7 @@ proc initNElem*(me: NElem) =
     me.center.onChange.invoke(me.pRect.center)
     me.pos.onChange.invoke(me.pRect.pos)
     me.rect.onChange.invoke(me.pRect)
+    me.requireRedraw
 
   me.center = newProperty[Point, EventPoint](
     proc(): Point = me.pRect.center, setCenter, true)
@@ -152,6 +162,7 @@ proc initNElem*(me: NElem) =
     me.center.onChange.invoke(me.pRect.center)
     me.pos.onChange.invoke(me.pRect.pos)
     me.rect.onChange.invoke(me.pRect)
+    me.requireRedraw
 
   me.pos = newProperty[Point, EventPoint](
     proc(): Point = me.pRect.pos, setPos, true)
@@ -170,6 +181,7 @@ proc initNElem*(me: NElem) =
     me.center.onChange.invoke(me.pRect.center)
     me.pos.onChange.invoke(me.pRect.pos)
     me.rect.onChange.invoke(me.pRect)
+    me.requireRedraw
 
   me.rect = newProperty[Rect, EventRect](
     proc(): Rect = me.pRect, setRect, true)
@@ -200,7 +212,7 @@ method processEvent*(e: NElem, ev: Event): EventResult
 
 
 proc add*(e: NElem, child: NElem) =
-  child.window = e.window
+  child.parent = e
   e.children.add(child)
 
 # -----------------------------------------------------------------------------
@@ -222,6 +234,7 @@ proc createWindow*(e: Engine, w, h: int, root: NElem, title = "",
   win.win = createWindow(title, x, y, w.cint, h.cint, flags).onFail:
     raise newException(NmlError, "Couldnt create window")
   win.renderer = createRenderer(win.win, -1, 0)
+  root.pWindow = win
   win.rootElem = root
   e.windows.add win
 
