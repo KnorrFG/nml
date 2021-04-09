@@ -17,7 +17,7 @@ suite "Interactive":
       Rectangle:
         color cBlack
         size <- parent
-      r = Rectangle:
+      Rectangle:
         color cWhite
         center <- parent
         size <- *parent / 6
@@ -26,8 +26,8 @@ suite "Interactive":
           rect <- parent
           
           slot onLClick: echo "hi"
-          slot onLPress: r.color.set color(200, 200, 200, 255)
-          slot onLClickEnd: r.color.set cWhite
+          slot onLPress: parent.color.set color(200, 200, 200, 255)
+          slot onLClickEnd: parent.color.set cWhite
 
     engine.createWindow(800, 600, newUi1())
     engine.run()

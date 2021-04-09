@@ -155,6 +155,17 @@ proc typeDefinition(name: NimNode, ctorSig: NimNode,
       StmtList(body)))
 
 
+proc getParentIdent(e: DslElem): NimNode =
+  ## a parent is either existing and, at the point where the function should be
+  ## used, has an identifier, or its not existing, in which case it should be
+  ## Ident"result". This function is used to get an identifier of the owning
+  ## element in the DSL
+  if e.parent.isSome:
+    e.parent.unsafeGet.ident.get
+  else:
+    Ident"result"
+
+
 proc toAst(e: DslElem): seq[NimNode] =
   ## creates the AST nodes for setting the elements properties, and adding them
   ## to the parent object. This function expects that the identifier is not
@@ -164,13 +175,7 @@ proc toAst(e: DslElem): seq[NimNode] =
   for confPair in e.config:
     result.add Call("set", DotExpr(e.ident.get, confPair.name), confPair.val)
 
-  let parent = if e.parent.isSome:
-                 e.parent.unsafeGet.ident.get
-               else:
-                 Ident"result"
-
-
-  result.add(Call(DotExpr(parent, Ident"add"), e.ident.get))
+  result.add(Call(DotExpr(e.getParentIdent, Ident"add"), e.ident.get))
 
 
 proc replaceSelf(n: NimNode, self: NimNode): NimNode =
@@ -179,6 +184,14 @@ proc replaceSelf(n: NimNode, self: NimNode): NimNode =
   ## element, which is provided in the self argument
   assert n.kind == nnkStmtList and self.kind == nnkIdent
   n.forNode(nnkIdent, (node) => (if node.strVal == "self": self else: node))
+
+
+proc replaceParent(n: NimNode, parent: NimNode): NimNode =
+  ## exprects n to be the body of a slot. In that body all occurences of the
+  ## identifier "self" must be replaces with the identifier of the owning
+  ## element, which is provided in the self argument
+  assert n.kind == nnkStmtList and parent.kind == nnkIdent
+  n.forNode(nnkIdent, (node) => (if node.strVal == "parent": parent else: node))
 
 
 proc startsWithParent(n: NimNode): bool =
@@ -200,8 +213,6 @@ proc elemsToAst(elems: seq[DslElem]): seq[NimNode] =
   # created below
   for e in elems:
     for slot in e.slots:
-      #echo "foo: " & slot.signal.repr
-      #echo "foo: " & slot.signal.treerepr
       let signal = if slot.signal.startsWithParent:
                      if e.parent.isNone:
                        slot.signal.replaceLeftMostIdentWith(Ident"result")
@@ -209,19 +220,17 @@ proc elemsToAst(elems: seq[DslElem]): seq[NimNode] =
                        slot.signal.replaceLeftMostIdentWith(
                          e.parent.unsafeGet.ident.get)
                    else: slot.signal
-      #echo "bar: " & signal.repr
-      #echo "slot.argnames: " & slot.argnames.repr
       #I cannot pass the signal as typed because it will not be valid if its a
       #local signal, But I cannot pass it as untyped, because then i cant do a
       #type look up, i need a second macro, that will just complete a local
       #signal, if it is one, and pass the result to generate callback
-      
       let completeSignalCall = Call("completeLocalSignal", signal, e.ident.get,
                                     e.elemType)
       result.add Call("generateCallback",
                       Prefix(bindSym"@", Bracket(slot.argnames)),
-                      slot.body.replaceSelf e.ident.get, completeSignalCall)
-      #echo "call: " & result[^1].repr
+                      slot.body.replaceSelf(e.ident.get).
+                        replaceParent(e.getParentIdent),
+                      completeSignalCall)
 
 
 proc nameFromDef(n): string=
