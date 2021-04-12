@@ -6,7 +6,7 @@
 # To run these tests, simply execute `nimble test`.
 
 import nml
-import unittest, os, strformat
+import unittest, os, strformat, strutils
 
 suite "Interactive":
   setup:
@@ -21,6 +21,15 @@ suite "Interactive":
         color cWhite
         center <- parent
         size <- *parent / 6
+
+        Text:
+          text unindent"""Click Me.
+                          I have two lines"""
+          fontFile "tests/font.ttf"
+          pointSize 20
+          vAlign aCenter
+          hAlign aCenter
+          rect <- parent
 
         MouseArea:
           rect <- parent

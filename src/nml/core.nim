@@ -13,6 +13,10 @@ type
     erQuit, erConsumed, erIgnored
 
 
+template raiseNmlError*(msg: string): untyped =
+  raise newException(NmlError, msg)
+
+
 template onFail*(res: SDL_Return, code: untyped)=
   if res == SdlError:
     code
@@ -53,9 +57,9 @@ proc point*(x, y: cint): Point = v(x, y)
 proc size*(w, h: cint): Size = v(w, h)
 proc rect*(x, y, w, h: cint): Rect = v(x, y, w, h)
 
-converter geomToSdl*(g: NVec[2, cint]): sdl2.Point = (x: g.x, y: g.y)
-converter geomToSdl*(g: NVec[4, cint]): sdl2.Rect =
-  (x: g.x, y: g.y, w: g.w, h: g.h)
+converter geomToSdl*[T](g: NVec[2, T]): sdl2.Point = (x: g.x.cint, y: g.y.cint)
+converter geomToSdl*[T](g: NVec[4, T]): sdl2.Rect =
+  (x: g.x.cint, y: g.y.cint, w: g.w.cint, h: g.h.cint)
 
 converter sdlToGeom*(r: sdl2.Rect): NVec[4, cint] = v(r.x, r.y, r.w, r.h)
 converter sdlToGeom*(r: sdl2.Point): NVec[2, cint] = v(r.x, r.y)
@@ -143,6 +147,7 @@ template defineEvent*(typeName: untyped): untyped =
 
 event EventEmpty
 defineEvent cint
+defineEvent string
 defineEvent Rect
 defineEvent Point
 defineEvent Size

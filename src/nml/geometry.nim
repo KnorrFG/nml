@@ -22,12 +22,12 @@ proc `[]`*[N, T, IT](v: NVec[N, T], index: IT): T = v.data[index]
 proc `[]=`*[N, T, IT](v: var NVec[N, T], index: IT, val: T) = v.data[index] = val
   
 
-proc `&`*[N1, N2: static[int],  T](v1: NVec[N1, T], v2: NVec[N2, T]):
-    NVec[N1 + N2, T] =
+proc `&`*[N1, N2: static[int],  T1, T2](v1: NVec[N1, T1], v2: NVec[N2, T2]):
+    NVec[N1 + N2, T1] =
   for i in 0 ..< N1:
     result[i] = v1[i]
   for i in 0 ..< N2:
-    result[i + N1] = v2[i]
+    result[i + N1] = v2[i].T1
 
 
 # this isnt ideal, as the type of intvec/2 should actually be floatvec, but for
@@ -39,7 +39,7 @@ template raiseOperator(op: untyped): untyped =
 
   proc op*[N, T, T2](v1: NVec[N, T], v2: NVec[N, T2]): NVec[N, T] =
     for i, (x1, x2) in zip(v1.data, v2.data):
-      result.data[i] = op(v1, v2).T
+      result.data[i] = op(x1, x2).T
 
 raiseOperator `+`
 raiseOperator `-`

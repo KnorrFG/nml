@@ -1,6 +1,8 @@
-import sdl2 except rect
-import core, engine, geometry
-import sugar
+import sdl2 except rect, Rect, Point
+import sdl2 / ttf
+import core, engine, geometry, sequtils, std / with
+import sugar, strutils
+import zero_functional
 
 
 # -----------------------------------------------------------------------------
@@ -141,10 +143,188 @@ method processEvent*(m: MouseArea, ev: Event): EventResult=
 # freetype.
 
 type 
-  TextAlignment = enum
-    taLeft, taCenter, taRight
-  Text = ref object of NElem
-    text: string
-    align: TextAlignment
-    ttf: string
+  Font = ref FontObj
+  FontObj = object
+    data: FontPtr
+
+proc `=destroy`(x: var FontObj) =
+  close x.data
+
+
+proc newFont(f: string, size: cint): Font =
+  let rawPtr = openFont(f, size).onFail:
+    raise newException(NmlError, "Couldn't load font:\p" & $getError())
+  result = Font(data: rawPtr)
+
+
+
+type 
+  Texture = ref TextureObj
+  TextureObj = object
+    data: TexturePtr
+
+proc `=destroy`(x: var TextureObj) =
+  destroy x.data
+
+
+proc newTexture(renderer: RendererPtr; format: uint32; access, w, h: cint):
+    Texture = Texture(data: createTexture(renderer, format, access, w, h))
+
+
+proc fromSurface(renderer: RendererPtr, surface: SurfacePtr): Texture =
+  Texture(data: createTextureFromSurface(renderer, surface))
+
+
+template withTarget(renderer: RendererPtr, target: Texture, code: untyped):
+    untyped =
+  renderer.setRenderTarget target.data
+  code
+  renderer.setRenderTarget nil
+
+
+proc copy[T1, T2](renderer: RendererPtr, texture: Texture, srcRect: NVec[4, T1],
+    targetRect: NVec[4, T2]) =
+  let 
+    srcrect: sdl2.Rect = srcRect
+    targetRect: sdl2.Rect = targetRect
+  renderer.copy texture.data, srcrect.unsafeAddr, targetRect.unsafeAddr
+
+
+type Alignment* = enum
+    aLeft, aCenter, aRight, aTop, aBottom
+
+proc getX(a: Alignment, srcW, destW: cint): cint =
+  case a:
+    of aLeft: 0
+    of aCenter: cint((destW - srcW) / 2)
+    of aRight: cint(destW - srcW)
+    else:
+      raiseNmlError "Invalid alignment for x value computation: " & a.repr
+
+proc getY(a: Alignment, srcH, destH: cint): cint =
+  case a:
+    of aTop: 0
+    of aCenter: cint((destH - srcH) / 2)
+    of aBottom: cint(destH - srcH)
+    else:
+      raiseNmlError "Invalid alignment for y value computation: " & a.repr
+
+
+defineEvent Alignment
+
+type Text* = ref object of NElem
+  pText, pFontFile: string
+  pPointSize: cint
+  pHAlign, pVAlign: Alignment
+  pColor: Color
+  textureW, textureH: cint
+  font: Font
+  rerenderText: bool
+  textTexture: Texture
+  text*: Property(string)
+  vAlign*, hAlign*: Property(Alignment)
+  fontFile*: Property(string)
+  pointSize*: Property(cint)
+  color*: Property(Color)
+
+proc newText*(): Text =
+  new result
+  result.initNElem()
+  with result:
+    pColor = cBlack
+    pPointSize = 12
+    pVAlign = aTop
+    pHAlign = aLeft
+    rerenderText = true
+
+  let me = result
+
+  proc requireRedraw(t: Text) =
+    t.rerenderText = true
+    engine.requireRedraw t
+
+  proc setFontFile(f: string) =
+    me.pFontFile = f
+    me.font = newFont(f, me.pPointSize)
+    me.requireRedraw
+
+  proc setPointSize(s: cint) =
+    me.pPointSize = s
+    me.font = newFont(me.pFontFile, s)
+    me.requireRedraw
+   
+  proc setText(t: string) =
+    me.pText = t
+    me.requireRedraw
+
+  proc setHAlign(a: Alignment) =
+    me.pHAlign = a
+    me.requireRedraw
+
+  proc setVAlign(a: Alignment) =
+    me.pVAlign = a
+    me.requireRedraw
+
+  proc setColor(c: Color) =
+    me.pColor = c
+    me.requireRedraw
+
+  result.text = newproperty[string, Eventstring](
+    proc(): string = me.ptext, setText)
+  result.vAlign = newproperty[Alignment, EventAlignment](
+    proc(): Alignment = me.pVAlign, setVAlign)
+  result.hAlign = newproperty[Alignment, EventAlignment](
+    proc(): Alignment = me.pHAlign, setHAlign)
+  result.fontFile = newProperty[string, Eventstring](
+    proc(): string = me.pFontFile, setFontFile)
+  result.pointSize = newProperty[cint, Eventcint](
+    proc(): cint = me.pPointSize, setPointSize)
+  result.color = newProperty[Color, EventColor](
+    proc(): Color = me.pColor, setColor)
+
+
+method draw(t: Text, parentRect: Rect, renderer: RendererPtr) =
+  ## Renders the text, which is stored on a texture with transparent surface,
+  ## if something changes that Texture needs to be recreated. Sdl ttf does not
+  ## support multiline text, so the text needs to be split, into lines, the
+  ## lines are rendered as surfaces, which need to be made into textures, and
+  ## will then be rendererd onto the internal texture
+  if t.rerenderText:
+    t.rerenderText = false
+    let 
+      lines = t.pText.splitlines.mapIt(
+        renderUtf8Blended(t.font.data, it.cstring, t.pColor))
+      textures = lines.mapIt(renderer.fromSurface(it))
+      widths = lines.mapIt(it.w)
+      heights = lines.mapIt(it.h)
+    t.textureW = widths.max
+    t.textureH = heights --> sum()
+
+    for line in lines:
+      line.freeSurface
+
+    t.textTexture = renderer.newTexture(SDL_PIXELFORMAT_RGBA8888,
+      SDL_TEXTUREACCESS_TARGET, t.textureW, t.textureH)
+    t.textTexture.data.setTextureBlendMode BlendMode_Blend
+    renderer.withTarget(t.textTexture):
+      var bgColor = t.pColor
+      bgColor.a = 0
+      renderer.setDrawColor bgColor
+      renderer.clear
+      var y: cint = 0
+      for (line, w, h) in zip(textures, widths, heights) --> to(seq):
+        renderer.copy line, v(0, 0, w, h),
+          v(t.pHAlign.getX(w, t.textureW), y, w, h)
+        y += h
+
+  # One gotcha here is that the texture that holds the text does probably not
+  # have the same dimension as the Text-NElem. And to prevent auto-scaling
+  # (because that would mess up the point size) we need to compute which part
+  # of the internal texture will be blit, and where it will be blit, depending
+  # on the alignments
+  let tr = t.rect.get()  # targetRect
+  renderer.copy t.textTexture, v(0, 0, t.textureW, t.textureH),
+    (t.pos.get() +
+    v(t.pHAlign.getX(t.textureW, tr.w), t.pVAlign.getY(t.textureH, tr.h))) &
+    v(t.textureW, t.textureH)
 

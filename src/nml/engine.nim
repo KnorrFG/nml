@@ -1,5 +1,6 @@
 import core, geometry
 import sdl2 except rect, Rect, Point
+import sdl2 / ttf
 import times
 
 type 
@@ -223,6 +224,8 @@ proc newEngine*(): Engine =
   new result
   init(INIT_TIMER or INIT_AUDIO or INIT_VIDEO).onFail:
     raise newException(NmlError, "Couldnt init SDL")
+  ttfInit().onFail:
+    raise newException(NmlError, "Couldnt init ttf")
 
 
 proc createWindow*(e: Engine, w, h: int, root: NElem, title = "",
@@ -233,7 +236,8 @@ proc createWindow*(e: Engine, w, h: int, root: NElem, title = "",
   let win = Window()
   win.win = createWindow(title, x, y, w.cint, h.cint, flags).onFail:
     raise newException(NmlError, "Couldnt create window")
-  win.renderer = createRenderer(win.win, -1, 0)
+  win.renderer = createRenderer(win.win, -1, Renderer_TargetTexture)
+  win.renderer.setDrawBlendMode BlendMode_Blend
   root.pWindow = win
   win.rootElem = root
   e.windows.add win
