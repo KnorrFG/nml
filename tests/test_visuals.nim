@@ -15,7 +15,7 @@ suite "Interactive":
   test "MouseArea":
     mkui(Ui1):
       Rectangle:
-        color cBlack
+        color cGreen
         size <- parent
       Rectangle:
         color cWhite

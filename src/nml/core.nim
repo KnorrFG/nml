@@ -22,6 +22,11 @@ template onFail*(res: SDL_Return, code: untyped)=
     code
 
 
+template onFail*(res: cint, code: untyped)=
+  if res != 0:
+    code
+
+
 template onFail*(res: bool, code: untyped)=
   if not res:
     code
@@ -107,6 +112,7 @@ macro event*(args: varargs[untyped]): untyped =
   procBody[2][0].add(argIdents)
   let invokeProc = newProc(postfix(ident("invoke"), "*"), procArgs, procBody)
   result.add(invokeProc)
+
 # -----------------------------------------------------------------------------
 # Property
 # -----------------------------------------------------------------------------
@@ -151,3 +157,30 @@ defineEvent string
 defineEvent Rect
 defineEvent Point
 defineEvent Size
+
+
+# -----------------------------------------------------------------------------
+# Alignment
+# -----------------------------------------------------------------------------
+
+type Alignment* = enum
+    aLeft, aCenter, aRight, aTop, aBottom, aCustom
+
+proc getX*(a: Alignment, srcW, destW: cint): cint =
+  case a:
+    of aLeft: 0
+    of aCenter: cint((destW - srcW) / 2)
+    of aRight: cint(destW - srcW)
+    else:
+      raiseNmlError "Invalid alignment for x value computation: " & a.repr
+
+proc getY*(a: Alignment, srcH, destH: cint): cint =
+  case a:
+    of aTop: 0
+    of aCenter: cint((destH - srcH) / 2)
+    of aBottom: cint(destH - srcH)
+    else:
+      raiseNmlError "Invalid alignment for y value computation: " & a.repr
+
+
+defineEvent Alignment

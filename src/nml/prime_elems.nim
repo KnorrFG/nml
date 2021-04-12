@@ -1,6 +1,6 @@
 import sdl2 except rect, Rect, Point
 import sdl2 / ttf
-import core, engine, geometry, sequtils, std / with
+import core, engine, geometry, sequtils, std / with, sdlwrapper
 import sugar, strutils
 import zero_functional
 
@@ -109,6 +109,41 @@ method processEvent*(m: MouseArea, ev: Event): EventResult=
 # Flickable
 # -----------------------------------------------------------------------------
 
+type Flickable* = ref object of NElem
+  inner: Texture
+  innerW, innerH: cint
+  innerRedrawRequired*: bool
+  innerVAlign*, innerHAlign*: Alignment
+
+proc inner*(f: Flickable): Texture = f.inner
+
+proc recreateInnerTexture*(f: Flickable, renderer: RendererPtr, w, h: cint) =
+  f.innerW = w
+  f.innerH = h
+  
+  f.inner = renderer.newTexture(SDL_PIXELFORMAT_RGBA8888,
+    SDL_TEXTUREACCESS_TARGET, w, h)
+  f.inner.data.setTextureBlendMode BlendMode_Blend
+
+proc innerW*(f: Flickable): cint = f.innerW
+proc innerH*(f: Flickable): cint = f.innerH
+
+method drawInner*(f: Flickable, renderer: RendererPtr) {.base, locks: 0.} =
+  doAssert false, "Not Implemented"
+
+method draw*(f: Flickable, parentRect: Rect, renderer: RendererPtr) =
+  if f.innerRedrawRequired:
+    f.innerRedrawRequired = false
+    f.drawInner(renderer)
+  let tr = f.rect.get()  # targetRect
+  renderer.withClip tr:
+    renderer.copy f.inner, v(0, 0, f.innerW, f.innerH),
+      (tr.pos +
+      v(f.innerHAlign.getX(f.innerW, tr.w),
+        f.innerVAlign.getY(f.innerH, tr.h))) & v(f.innerW, f.innerH)
+
+
+
 # -----------------------------------------------------------------------------
 # Text
 # -----------------------------------------------------------------------------
@@ -142,77 +177,7 @@ method processEvent*(m: MouseArea, ev: Event): EventResult=
 # looking text, I can probably get the kerning values from the font using
 # freetype.
 
-type 
-  Font = ref FontObj
-  FontObj = object
-    data: FontPtr
-
-proc `=destroy`(x: var FontObj) =
-  close x.data
-
-
-proc newFont(f: string, size: cint): Font =
-  let rawPtr = openFont(f, size).onFail:
-    raise newException(NmlError, "Couldn't load font:\p" & $getError())
-  result = Font(data: rawPtr)
-
-
-
-type 
-  Texture = ref TextureObj
-  TextureObj = object
-    data: TexturePtr
-
-proc `=destroy`(x: var TextureObj) =
-  destroy x.data
-
-
-proc newTexture(renderer: RendererPtr; format: uint32; access, w, h: cint):
-    Texture = Texture(data: createTexture(renderer, format, access, w, h))
-
-
-proc fromSurface(renderer: RendererPtr, surface: SurfacePtr): Texture =
-  Texture(data: createTextureFromSurface(renderer, surface))
-
-
-template withTarget(renderer: RendererPtr, target: Texture, code: untyped):
-    untyped =
-  renderer.setRenderTarget target.data
-  code
-  renderer.setRenderTarget nil
-
-
-proc copy[T1, T2](renderer: RendererPtr, texture: Texture, srcRect: NVec[4, T1],
-    targetRect: NVec[4, T2]) =
-  let 
-    srcrect: sdl2.Rect = srcRect
-    targetRect: sdl2.Rect = targetRect
-  renderer.copy texture.data, srcrect.unsafeAddr, targetRect.unsafeAddr
-
-
-type Alignment* = enum
-    aLeft, aCenter, aRight, aTop, aBottom
-
-proc getX(a: Alignment, srcW, destW: cint): cint =
-  case a:
-    of aLeft: 0
-    of aCenter: cint((destW - srcW) / 2)
-    of aRight: cint(destW - srcW)
-    else:
-      raiseNmlError "Invalid alignment for x value computation: " & a.repr
-
-proc getY(a: Alignment, srcH, destH: cint): cint =
-  case a:
-    of aTop: 0
-    of aCenter: cint((destH - srcH) / 2)
-    of aBottom: cint(destH - srcH)
-    else:
-      raiseNmlError "Invalid alignment for y value computation: " & a.repr
-
-
-defineEvent Alignment
-
-type Text* = ref object of NElem
+type Text* = ref object of Flickable
   pText, pFontFile: string
   pPointSize: cint
   pHAlign, pVAlign: Alignment
@@ -233,14 +198,20 @@ proc newText*(): Text =
   with result:
     pColor = cBlack
     pPointSize = 12
+    # these decide how the lines are layed out within the inner texture
     pVAlign = aTop
     pHAlign = aLeft
+    # these decide how the inner canvas is placed within the actual drawing
+    # area
+    innerVAlign = aTop
+    innerHAlign = aLeft
     rerenderText = true
+    innerRedrawRequired = true
 
   let me = result
 
   proc requireRedraw(t: Text) =
-    t.rerenderText = true
+    t.innerRedrawRequired = true
     engine.requireRedraw t
 
   proc setFontFile(f: string) =
@@ -259,10 +230,12 @@ proc newText*(): Text =
 
   proc setHAlign(a: Alignment) =
     me.pHAlign = a
+    me.innerHAlign = a
     me.requireRedraw
 
   proc setVAlign(a: Alignment) =
     me.pVAlign = a
+    me.innerVAlign = a
     me.requireRedraw
 
   proc setColor(c: Color) =
@@ -283,48 +256,32 @@ proc newText*(): Text =
     proc(): Color = me.pColor, setColor)
 
 
-method draw(t: Text, parentRect: Rect, renderer: RendererPtr) =
+method drawInner(t: Text, renderer: RendererPtr) =
   ## Renders the text, which is stored on a texture with transparent surface,
   ## if something changes that Texture needs to be recreated. Sdl ttf does not
   ## support multiline text, so the text needs to be split, into lines, the
   ## lines are rendered as surfaces, which need to be made into textures, and
   ## will then be rendererd onto the internal texture
-  if t.rerenderText:
-    t.rerenderText = false
-    let 
-      lines = t.pText.splitlines.mapIt(
-        renderUtf8Blended(t.font.data, it.cstring, t.pColor))
-      textures = lines.mapIt(renderer.fromSurface(it))
-      widths = lines.mapIt(it.w)
-      heights = lines.mapIt(it.h)
-    t.textureW = widths.max
-    t.textureH = heights --> sum()
+  let 
+    lines = t.pText.splitlines.mapIt(
+      renderUtf8Blended(t.font.data, it.cstring, t.pColor))
+    textures = lines.mapIt(renderer.fromSurface(it))
+    widths = lines.mapIt(it.w)
+    heights = lines.mapIt(it.h)
+    w = widths.max
+    h = heights --> sum()
 
-    for line in lines:
-      line.freeSurface
+  for line in lines:
+    line.freeSurface
 
-    t.textTexture = renderer.newTexture(SDL_PIXELFORMAT_RGBA8888,
-      SDL_TEXTUREACCESS_TARGET, t.textureW, t.textureH)
-    t.textTexture.data.setTextureBlendMode BlendMode_Blend
-    renderer.withTarget(t.textTexture):
-      var bgColor = t.pColor
-      bgColor.a = 0
-      renderer.setDrawColor bgColor
-      renderer.clear
-      var y: cint = 0
-      for (line, w, h) in zip(textures, widths, heights) --> to(seq):
-        renderer.copy line, v(0, 0, w, h),
-          v(t.pHAlign.getX(w, t.textureW), y, w, h)
-        y += h
-
-  # One gotcha here is that the texture that holds the text does probably not
-  # have the same dimension as the Text-NElem. And to prevent auto-scaling
-  # (because that would mess up the point size) we need to compute which part
-  # of the internal texture will be blit, and where it will be blit, depending
-  # on the alignments
-  let tr = t.rect.get()  # targetRect
-  renderer.copy t.textTexture, v(0, 0, t.textureW, t.textureH),
-    (t.pos.get() +
-    v(t.pHAlign.getX(t.textureW, tr.w), t.pVAlign.getY(t.textureH, tr.h))) &
-    v(t.textureW, t.textureH)
-
+  t.recreateInnerTexture(renderer, w, h)
+  renderer.withTarget(t.inner):
+    var bgColor = t.pColor
+    bgColor.a = 0
+    renderer.setDrawColor bgColor
+    renderer.clear
+    var y: cint = 0
+    for (line, w, h) in zip(textures, widths, heights) --> to(seq):
+      renderer.copy line, v(0, 0, w, h),
+        v(t.pHAlign.getX(w, t.innerW), y, w, h)
+      y += h
