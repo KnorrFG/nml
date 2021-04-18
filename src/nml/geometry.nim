@@ -1,5 +1,5 @@
 import sequtils
-import macros, macroutils
+import macros, macroutils, math
 
 type NVec*[N: static[int], T] = object
   data*: array[N, T]
@@ -28,6 +28,11 @@ proc `&`*[N1, N2: static[int],  T1, T2](v1: NVec[N1, T1], v2: NVec[N2, T2]):
     result[i] = v1[i]
   for i in 0 ..< N2:
     result[i + N1] = v2[i].T1
+
+
+proc abs*[N: static[int], T](v1: NVec[N, T]): float64 =
+  let squares = v1.data.mapIt(it ^ 2)
+  squares.foldl(a + b).float64.sqrt()
 
 
 # this isnt ideal, as the type of intvec/2 should actually be floatvec, but for

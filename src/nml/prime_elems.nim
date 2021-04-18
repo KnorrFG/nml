@@ -46,6 +46,19 @@ method draw*(r: Rectangle, parentRect: core.Rect, renderer: RendererPtr) =
 # -----------------------------------------------------------------------------
 # MouseArea
 # -----------------------------------------------------------------------------
+type DragMode* = enum
+    dmNone, dmVertical, dmHorizontal, dmFree
+
+defineEvent DragMode
+
+proc diff(dm: DragMode, a, b: Point): Point =
+  case dm:
+    of dmFree: a - b
+    of dmHorizontal: v((a - b).x, 0.cint)
+    of dmVertical: v(0.cint, (a - b).y)
+    of dmNone: v(0.cint, 0.cint)
+
+
 type MouseArea* = ref object of NElem
   onLClick*, onLPress*, onLClickEnd*, onLRelease*: EventEmpty ##\
     ## There are subtle differences between these events. On LPress is simply a
@@ -58,7 +71,11 @@ type MouseArea* = ref object of NElem
     ## pressed as reaction to onLPress, button back to normal as reaction to
     ## onLClickEnd and buisness logic as reaction to onClick. onLRelease in
     ## onlry there for completeness
-  lpressActive: bool
+  onDragStart*, onDragEnd*: EventEmpty
+  lpressActive, dragActive: bool
+  pDragMode: DragMode
+  lastMousePos: Point
+  dragMode*: Property(DragMode)
 
 proc newMouseArea*(): MouseArea =
   new result
@@ -67,38 +84,92 @@ proc newMouseArea*(): MouseArea =
   result.onLClickEnd = EventEmpty()
   result.onLPress = EventEmpty()
   result.onLRelease = EventEmpty()
+  result.onDragStart = EventEmpty()
+  result.onDragEnd = EventEmpty()
   result.lpressActive = false
+  result.dragActive = false
+  result.pDragMode = dmNone
+  
+  let me = result
+  result.dragMode = newProperty[DragMode, EventDragMode](
+    proc(): DragMode = me.pDragMode,
+    proc(x: DragMode) = me.pDragMode = x)
 
 
+proc checkLClickStart(m: MouseArea, ev: Event): bool =
+  ev.kind == MouseButtonDown and ev.button.button == BUTTON_LEFT and 
+    m.rect.get().contains(v(ev.button.x, ev.button.y))
+
+
+proc checkLRelease(m: MouseArea, ev: Event, within = true): bool =
+  ev.kind == MouseButtonUp and ev.button.button == BUTTON_LEFT and
+      (not within or m.rect.get().contains(v(ev.button.x, ev.button.y)))
+
+
+proc checkLClickCancel(m: MouseArea, ev: Event): bool =
+  if ev.kind == MouseButtonDown: return true
+  elif ev.kind == MouseMotion:
+    let ev = ev.motion
+    return not m.rect.get().contains(v(ev.x, ev.y))
+  false
+
+
+proc checkDragStart(m: MouseArea, ev: Event): bool =
+  if ev.kind == MouseMotion:
+    let pos = v(ev.motion.x, ev.motion.y) 
+    return abs(pos - m.lastMousePos) > 10
+  false
+
+   
 method processEvent*(m: MouseArea, ev: Event): EventResult=
-  if ev.kind == MouseButtonDown:
-    if ev.button.button == BUTTON_LEFT and 
-        m.rect.get().contains(v(ev.button.x, ev.button.y)):
+  result = erIgnored
+  let dragable = m.pDragMode != dmNone
+
+  if m.checkLRelease(ev):
+    m.onLRelease.invoke
+    result = erConsumed
+
+  # I know this could be organized differtently, but the way it's ornized now
+  # will allow me to split this off into a state machine if need be
+  if not m.lpressActive and not m.dragActive:
+    if m.checkLClickStart(ev):
       m.lpressActive = true
       m.onLPress.invoke
-      erConsumed
-    else:
-      m.lpressActive = false
-      m.onLClickEnd.invoke
-      erIgnored
-  elif ev.kind == MouseButtonUp and ev.button.button == BUTTON_LEFT and
-      m.rect.get().contains(v(ev.button.x, ev.button.y)):
-    m.onLRelease.invoke
-    if m.lPressActive:
-      m.lpressActive = false
-      m.onLClick.invoke
-      m.onLClickEnd.invoke
-    erConsumed
-  elif ev.kind == MouseMotion and m.lpressActive:
-    let ev = ev.motion
-    if not m.rect.get().contains(v(ev.x, ev.y)):
-      m.lpressActive = false
-      m.onLClickEnd.invoke
-      erConsumed
-    else:
-      erIgnored
-  else:
-    erIgnored
+      m.lastMousePos = v(ev.button.x, ev.button.y)
+      result = erConsumed
+  elif m.lpressActive and not dragable:
+    if m.checkLRelease(ev):
+      m.lpressactive = false
+      m.onlclick.invoke
+      m.onlclickend.invoke
+    elif m.checkLClickCancel(ev):
+      m.lpressactive = false
+      m.onlclickend.invoke
+      result = erconsumed
+  elif m.lpressActive and dragable:
+    if m.checkLRelease(ev):
+      m.lpressactive = false
+      m.onlclick.invoke
+      m.onlclickend.invoke
+      result = erconsumed
+    elif m.checkDragStart(ev):
+      m.lpressactive = false
+      m.dragActive = true
+      m.onlclickend.invoke
+      m.onDragStart.invoke
+      result = erconsumed
+  elif m.dragActive:
+    if m.checkLRelease(ev, within=false):
+      m.dragActive = false
+      m.onDragEnd.invoke
+      result = erconsumed
+    if ev.kind == MouseMotion:
+      let 
+        pos = v(ev.motion.x, ev.motion.y)
+        diff = m.pDragMode.diff(pos, m.lastMousePos)
+      m.lastMousePos = pos
+      m.pos.set m.pos.get() + diff
+
 
 
 # -----------------------------------------------------------------------------

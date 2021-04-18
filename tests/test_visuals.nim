@@ -17,10 +17,19 @@ suite "Interactive":
       Rectangle:
         color cGreen
         size <- parent
-      Rectangle:
-        color cWhite
+
+      MouseArea:
         center <- parent
         size <- *parent / 6
+        
+        dragMode dmNone
+        slot onLClick: echo "hi"
+        slot onLPress: r.color.set color(200, 200, 200, 255)
+        slot onLClickEnd: r.color.set cWhite
+
+        r = Rectangle:
+          color cWhite
+          rect <- parent
 
         Text:
           text unindent"""Click Me.
@@ -30,13 +39,6 @@ suite "Interactive":
           vAlign aCenter
           hAlign aCenter
           rect <- parent
-
-        MouseArea:
-          rect <- parent
-          
-          slot onLClick: echo "hi"
-          slot onLPress: parent.color.set color(200, 200, 200, 255)
-          slot onLClickEnd: parent.color.set cWhite
 
     engine.createWindow(800, 600, newUi1())
     engine.run()

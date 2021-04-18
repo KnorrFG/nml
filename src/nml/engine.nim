@@ -1,7 +1,9 @@
 import core, geometry
 import sdl2 except rect, Rect, Point
 import sdl2 / ttf
-import times
+import times, os
+
+const frameDur = int((1 / 60) * 1000)
 
 type 
   Point = core.Point
@@ -288,19 +290,29 @@ proc processEvent(w: Window, ev: Event): EventResult =
       return w.rootElem.processEvent(ev)
 
 
+proc pollEvents(): seq[Event] =
+  var ev: Event
+  while pollEvent(ev):
+    result.add(ev)
+
+
 proc run*(e: var Engine) =
-  var event: Event
   while e.windows.len > 0:
-    waitEvent(event).onFail:
-      raise newException(NmlError, "waitEvent: " & $getError())
-    for i, w in e.windows:
-      case w.processEvent event:
-        of erQuit:
-          w.win.destroyWindow
-          e.windows.delete i
-          break
-        of erConsumed: break
-        of erIgnored: discard
+    let events = pollEvents() 
+
+    if events.len == 0:
+      sleep(frameDur)
+      continue
+
+    for ev in events:
+      for i, w in e.windows:
+        case w.processEvent ev:
+          of erQuit:
+            w.win.destroyWindow
+            e.windows.delete i
+            break
+          of erConsumed: break
+          of erIgnored: discard
 
     for w in e.windows:
       w.redrawIfNecessary()

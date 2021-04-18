@@ -154,6 +154,7 @@ template defineEvent*(typeName: untyped): untyped =
 event EventEmpty
 defineEvent cint
 defineEvent string
+defineEvent bool
 defineEvent Rect
 defineEvent Point
 defineEvent Size
