@@ -1,6 +1,6 @@
 import sdl2 except rect, Rect, Point
 import sdl2 / ttf
-import core, engine, geometry, sequtils, std / with, sdlwrapper
+import core, engine, geometry, sequtils, std / with, sdlwrapper, Options
 import sugar, strutils
 import zero_functional
 
@@ -27,20 +27,15 @@ proc newRectangle*(): Rectangle =
 
   result.color = newProperty[Color, EventColor](proc(): Color = me.pColor,
                                                 setColor)
+
 method draw*(r: Rectangle, parentRect: core.Rect, renderer: RendererPtr) =
-  let 
-    innerRect = r.rect.get() 
-    innerPos = innerRect.pos
-    innerSize = innerRect.size
-    targetPos = if innerPos == defaultRect.pos: parentRect.pos else: innerPos
-    targetSize = if innerSize == defaultRect.size: parentRect.size
-                 else: innerSize
-    targetRect: sdl2.Rect = targetPos & targetSize
+  let myRect = r.rect.get()
+  echo "myRect: ", myRect
   renderer.setDrawColor r.pColor
-  renderer.fillRect unsafeAddr targetRect
+  renderer.fillRect myRect
 
   for c in r.children:
-    c.draw targetRect, renderer
+    c.draw myRect, renderer
 
 
 # -----------------------------------------------------------------------------
@@ -185,6 +180,27 @@ type Flickable* = ref object of NElem
   innerW, innerH: cint
   innerRedrawRequired*: bool
   innerVAlign*, innerHAlign*: Alignment
+  vBarMouseArea, hBarMouseArea: MouseArea
+  scrollBarBackground*, scrollBarSlider*: Property(NElem)
+  pScrollBarBackground, pScrollBarSlider: NElem
+  pScrollBarThickness: cint
+  scrollBarThickness: Property(cint)
+
+
+proc initFlickable*(f: Flickable) =
+  f.initNElem()
+  f.vBarMouseArea = newMouseArea()
+  f.hBarMouseArea = newMouseArea()
+  f.scrollBarBackground = newProperty[NElem, EventNElem](
+    proc(): NElem = f.pScrollBarBackground,
+    proc(n: NElem) = f.pScrollBarBackground = n)
+  f.scrollBarSlider = newProperty[NElem, EventNElem](
+    proc(): NElem = f.pScrollBarSlider,
+    proc(n: NElem) = f.pScrollBarSlider = n)
+  f.scrollBarThickness = newProperty[cint, EventCint](
+    proc(): cint = f.pScrollBarThickness,
+    proc(i: cint) = f.pScrollBarThickness = i)
+  f.pScrollBarThickness = 10
 
 proc inner*(f: Flickable): Texture = f.inner
 
@@ -202,16 +218,84 @@ proc innerH*(f: Flickable): cint = f.innerH
 method drawInner*(f: Flickable, renderer: RendererPtr) {.base, locks: 0.} =
   doAssert false, "Not Implemented"
 
+
+proc hasScrollBars(f: Flickable): bool =
+  not f.pScrollBarBackground.isNil and not f.pScrollBarSlider.isNil
+
+
+proc getDimensionsWithScrollBars(f: Flickable):
+    (Rect, Option[Rect], Option[Rect]) =
+  ## computes the Rects for the display of the inner texture, and both
+  ## scrollbars. However, ScrollBars are optional. The first opt rect is the
+  ## vertical bar, the 2nd one the horizontal one
+  let 
+    myRect = f.rect.get()
+    innerSize = v(f.innerW, f.innerH)
+
+  proc vBarRect(): auto = some(v(myRect.right - f.pScrollBarThickness,
+                                 myRect.top,
+                                 f.pScrollBarThickness, myRect.h))
+
+  proc hBarRect(): auto = some(v(myRect.left,
+                                 myRect.bottom - f.pScrollBarThickness,
+                                 myRect.w, f.pScrollBarThickness))
+
+  proc displayRect(reduceW, reduceH: bool): Rect =
+    myRect.pos & (myRect.size - v(if reduceW: f.pScrollBarThickness else: 0,
+                                  if reduceH: f.pScrollBarThickness else: 0))
+
+  if innerSize.fitsIn(myRect.size):
+    return (myRect, none(Rect), none(Rect))
+  elif myRect.size.fitsIn(innerSize):
+    # the inner rect is larger in both dimensions, both bars needed
+    return (displayRect(true, true), vBarRect(), hBarRect())
+  elif myRect.w < innerSize.w:
+    # Needs a the horizontal scrollbar, but that costs vertical space, so I
+    # need to check whether the vertival space - the bar is still large enoug
+    if myRect.h - f.pScrollBarThickness >= innerSize.h:
+      return (displayRect(false, true), none(Rect), hBarRect())
+    else:
+      return (displayRect(true, true), vBarRect(), hBarRect())
+  elif myRect.h < innerSize.h:
+    if myRect.w - f.pScrollBarThickness >= innerSize.w:
+      return (displayRect(true, false), vBarRect(), none(Rect))
+    else:
+      return (displayRect(true, true), vBarRect(), hBarRect())
+
+
 method draw*(f: Flickable, parentRect: Rect, renderer: RendererPtr) =
   if f.innerRedrawRequired:
     f.innerRedrawRequired = false
     f.drawInner(renderer)
+
   let tr = f.rect.get()  # targetRect
-  renderer.withClip tr:
-    renderer.copy f.inner, v(0, 0, f.innerW, f.innerH),
-      (tr.pos +
-      v(f.innerHAlign.getX(f.innerW, tr.w),
-        f.innerVAlign.getY(f.innerH, tr.h))) & v(f.innerW, f.innerH)
+  if f.hasScrollBars:
+    let (innerSize, vScrollBar, hScrollBar) = f.getDimensionsWithScrollBars()
+    renderer.withClip innerSize:
+      renderer.copy f.inner, v(0, 0, f.innerW, f.innerH),
+        (tr.pos +
+        v(f.innerHAlign.getX(f.innerW, tr.w),
+          f.innerVAlign.getY(f.innerH, tr.h))) & v(f.innerW, f.innerH)
+    if vScrollBar.isSome:
+      let r = vScrollBar.unsafeget
+      echo "vscrollbar: ", r
+      f.pScrollBarBackground.rect.set r
+      f.pScrollBarBackground.draw(tr, renderer)
+    if hScrollBar.isSome:
+      let r = hScrollBar.unsafeget
+      echo "hscrollbar: ", r
+      f.pScrollBarBackground.rect.set r
+      echo f.pScrollBarBackground.rect.get()
+      # so for whatever reason f.pScrollBarBackground.rect is not the same var
+      # as r.rect from within the draw method. Could be a nim related
+      # inheritance thing ... make a minimal example to test
+      f.pScrollBarBackground.draw(tr, renderer)
+  else:
+    renderer.withClip tr:
+      renderer.copy f.inner, v(0, 0, f.innerW, f.innerH),
+        (tr.pos +
+        v(f.innerHAlign.getX(f.innerW, tr.w),
+          f.innerVAlign.getY(f.innerH, tr.h))) & v(f.innerW, f.innerH)
 
 
 
@@ -265,7 +349,7 @@ type Text* = ref object of Flickable
 
 proc newText*(): Text =
   new result
-  result.initNElem()
+  result.initFlickable()
   with result:
     pColor = cBlack
     pPointSize = 12

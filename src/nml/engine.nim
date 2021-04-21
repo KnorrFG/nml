@@ -47,6 +47,8 @@ proc `=destroy`(x: var WindowObj) =
 # NElem
 # -----------------------------------------------------------------------------
 
+defineEvent NElem
+
 proc window*(e: NElem): Window =
   if e.parent.isNil: e.pWindow
   else: e.parent.window

@@ -85,3 +85,7 @@ proc pos*[T](r: AbstractRect[T]): AbstractPoint[T] = v(r[0], r[1])
 proc size*[T](r: AbstractRect[T]): AbstractSize[T] = v(r[2], r[3])
 func contains*[T](r: AbstractRect[T], p: AbstractPoint[T]): bool =
    p.x > r.x and p.x < r.right and p.y > r.y and p.y < r.bottom
+
+
+proc fitsIn*[T1, T2](a: AbstractSize[T1], b: AbstractSize[T2]): bool =
+  a.w <= b.w and a.h <= b.h

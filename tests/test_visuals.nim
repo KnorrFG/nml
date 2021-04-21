@@ -13,6 +13,14 @@ suite "Interactive":
     var engine = newEngine()
 
   test "MouseArea":
+    mkui(ScrollBarBackground):
+      Rectangle:
+        color cBlue
+
+    mkui(ScrollBarSlider):
+      Rectangle:
+        color cRed
+
     mkui(Ui1):
       Rectangle:
         color cGreen
@@ -39,6 +47,18 @@ suite "Interactive":
           vAlign aCenter
           hAlign aCenter
           rect <- parent
+
+      Text:
+        pos point(0, 0)
+        size <- *parent / 6
+        fontFile "tests/font.ttf"
+        pointSize 20
+        text """Im way too long
+                for my space
+                So I should have scroll bars""".unindent
+        scrollBarBackground newScrollBarBackground()
+        scrollBarSlider newScrollBarSlider()
+
 
     engine.createWindow(800, 600, newUi1())
     engine.run()

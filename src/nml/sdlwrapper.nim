@@ -9,7 +9,7 @@ import core, geometry
 type 
   Font* = ref FontObj
   FontObj = object
-    data*: FontPtr
+    data: FontPtr
 
 proc `=destroy`*(x: var FontObj) =
   close x.data
@@ -19,6 +19,12 @@ proc newFont*(f: string, size: cint): Font =
   let rawPtr = openFont(f, size).onFail:
     raise newException(NmlError, "Couldn't load font:\p" & $getError())
   result = Font(data: rawPtr)
+
+
+proc data*(f: Font): FontPtr = 
+  if f.isNil:
+    raiseNmlError "No Font Specified"
+  f.data
 
 # -----------------------------------------------------------------------------
 # Texture
@@ -67,3 +73,6 @@ template withClip*(renderer: RendererPtr, rect: Rect, code: typed): untyped =
   renderer.setClipRect(nil).onFail:
     raiseNmlError "Couldnt reset renderer clip: " & $getError()
 
+proc fillRect*(r: RendererPtr, target: Rect) =
+  let t: sdl2.Rect = target
+  r.fillRect t.unsafeaddr
