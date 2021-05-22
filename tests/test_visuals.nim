@@ -16,10 +16,12 @@ suite "Interactive":
     mkui(ScrollBarBackground):
       Rectangle:
         color cBlue
+        rect <- parent
 
     mkui(ScrollBarSlider):
       Rectangle:
         color cRed
+        rect <- parent
 
     mkui(Ui1):
       Rectangle:
@@ -30,7 +32,7 @@ suite "Interactive":
         center <- parent
         size <- *parent / 6
         
-        dragMode dmNone
+        dragMode dmFree
         slot onLClick: echo "hi"
         slot onLPress: r.color.set color(200, 200, 200, 255)
         slot onLClickEnd: r.color.set cWhite
@@ -55,7 +57,11 @@ suite "Interactive":
         pointSize 20
         text """Im way too long
                 for my space
-                So I should have scroll bars""".unindent
+                So I should have scroll bars
+                a
+                a
+                a
+                a""".unindent
         scrollBarBackground newScrollBarBackground()
         scrollBarSlider newScrollBarSlider()
 

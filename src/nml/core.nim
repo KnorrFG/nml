@@ -1,5 +1,5 @@
 import sdl2
-import os, sugar, macros
+import os, sugar, macros, options
 import geometry
 
 
@@ -37,7 +37,6 @@ template onFail*[T](res: ptr T, code: untyped): ptr T =
   if p == nil:
     code
   p
-
 
 # -----------------------------------------------------------------------------
 # Colors
@@ -150,6 +149,7 @@ template Property*(typeName: untyped): untyped =
 
 template defineEvent*(typeName: untyped): untyped =
   event `Event typeName`, typeName
+
 
 event EventEmpty
 defineEvent cint

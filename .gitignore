@@ -1,2 +1,3 @@
 src/nml/build_macro
 tests/test_macros
+tests/test_visuals

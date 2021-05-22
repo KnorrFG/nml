@@ -17,9 +17,9 @@ macro v*(data: varargs[typed]): untyped =
   Call(newTree(nnkBracketExpr, Ident"initNVec", Lit data.len, data[0].gettype),
        data)
   
-
 proc `[]`*[N, T, IT](v: NVec[N, T], index: IT): T = v.data[index]
-proc `[]=`*[N, T, IT](v: var NVec[N, T], index: IT, val: T) = v.data[index] = val
+proc `[]=`*[N, T, IT](v: var NVec[N, T], index: IT, val: T) =
+  v.data[index] = val
   
 
 proc `&`*[N1, N2: static[int],  T1, T2](v1: NVec[N1, T1], v2: NVec[N2, T2]):
@@ -33,6 +33,14 @@ proc `&`*[N1, N2: static[int],  T1, T2](v1: NVec[N1, T1], v2: NVec[N2, T2]):
 proc abs*[N: static[int], T](v1: NVec[N, T]): float64 =
   let squares = v1.data.mapIt(it ^ 2)
   squares.foldl(a + b).float64.sqrt()
+
+
+proc `==`*[N1: static[int], N2: static[int], T1, T2](
+    a: NVec[N1, T1], b: NVec[N2, T2]): bool =
+  if N1 == N2:
+    zip(a.data, b.data).mapIt(it[0] == it[1]).foldl(a and b)
+  else:
+    false
 
 
 # this isnt ideal, as the type of intvec/2 should actually be floatvec, but for
@@ -61,7 +69,8 @@ macro makeProperty(dType: type, name: untyped, index: int): untyped =
   let setIdent = AccQuoted(Ident(name.strval & "="))
   quote do:
     proc `name`*[T](self: `dType`[T]): T = self.data[`index`]
-    proc `setIdent`*[T](self: var `dType`[T], val: T) = self.data[`index`] = val
+    proc `setIdent`*[T](self: var `dType`[T], val: T) =
+      self.data[`index`] = val
 
 makeProperty AbstractRect, x, 0
 makeProperty AbstractRect, y, 1
@@ -77,7 +86,9 @@ makeProperty AbstractSize, w, 0
 makeProperty AbstractSize, h, 1
 
 proc right*[T](r: AbstractRect[T]): T = r.x + r.w
+proc `right=`*[T](r: var AbstractRect[T], val: T) = r.x = val - r.w
 proc bottom*[T](r: AbstractRect[T]): T = r.y + r.h
+proc `bottom=`*[T](r: var AbstractRect[T], val: T) = r.y = val - r.h
 proc centerX*[T](r: AbstractRect[T]): T = r.x + T(r.w / 2)
 proc centerY*[T](r: AbstractRect[T]): T = r.y + T(r.h / 2)
 proc center*[T](r: AbstractRect[T]): AbstractPoint[T] = v(r.centerX, r.centerY)
@@ -89,3 +100,21 @@ func contains*[T](r: AbstractRect[T], p: AbstractPoint[T]): bool =
 
 proc fitsIn*[T1, T2](a: AbstractSize[T1], b: AbstractSize[T2]): bool =
   a.w <= b.w and a.h <= b.h
+
+proc restrictTo*[T1, T2](a: AbstractRect[T1], b: AbstractRect[T2]):
+    AbstractRect[T1] =
+  ## Will make sure that a is inside b. Will return a if a is inside b, or move
+  ## a to be just inside b
+  assert a.size.fitsIn b.size
+  result = a
+  if a.left < b.left:
+    result.left = b.left
+  elif a.right > b.right:
+    result.right = b.right
+
+  if a.top < b.top:
+    result.top = b.top
+  elif a.bottom > b.bottom:
+    result.bottom = b.bottom
+
+  

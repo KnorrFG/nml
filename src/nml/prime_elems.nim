@@ -3,6 +3,7 @@ import sdl2 / ttf
 import core, engine, geometry, sequtils, std / with, sdlwrapper, Options
 import sugar, strutils
 import zero_functional
+import strformat
 
 
 # -----------------------------------------------------------------------------
@@ -30,7 +31,6 @@ proc newRectangle*(): Rectangle =
 
 method draw*(r: Rectangle, parentRect: core.Rect, renderer: RendererPtr) =
   let myRect = r.rect.get()
-  echo "myRect: ", myRect
   renderer.setDrawColor r.pColor
   renderer.fillRect myRect
 
@@ -41,10 +41,14 @@ method draw*(r: Rectangle, parentRect: core.Rect, renderer: RendererPtr) =
 # -----------------------------------------------------------------------------
 # MouseArea
 # -----------------------------------------------------------------------------
-type DragMode* = enum
+type 
+  DragMode* = enum
     dmNone, dmVertical, dmHorizontal, dmFree
+  OptRect* = Option[Rect]
+
 
 defineEvent DragMode
+defineEvent OptRect
 
 proc diff(dm: DragMode, a, b: Point): Point =
   case dm:
@@ -71,6 +75,10 @@ type MouseArea* = ref object of NElem
   pDragMode: DragMode
   lastMousePos: Point
   dragMode*: Property(DragMode)
+  dragRestrictionRect*: Property(OptRect)  ##\
+    ## Setting this will make the object draggable within the defined rect, and
+    ## ignore the dragMode
+  pDragRestrictionRect: OptRect
 
 proc newMouseArea*(): MouseArea =
   new result
@@ -84,11 +92,16 @@ proc newMouseArea*(): MouseArea =
   result.lpressActive = false
   result.dragActive = false
   result.pDragMode = dmNone
+  result.pDragRestrictionRect = none(Rect)
   
   let me = result
   result.dragMode = newProperty[DragMode, EventDragMode](
     proc(): DragMode = me.pDragMode,
     proc(x: DragMode) = me.pDragMode = x)
+
+  result.dragRestrictionRect = newProperty[OptRect, EventOptRect](
+    proc(): OptRect = me.pDragRestrictionRect,
+    proc(x: OptRect) = me.pDragRestrictionRect = x)
 
 
 proc checkLClickStart(m: MouseArea, ev: Event): bool =
@@ -118,7 +131,7 @@ proc checkDragStart(m: MouseArea, ev: Event): bool =
    
 method processEvent*(m: MouseArea, ev: Event): EventResult=
   result = erIgnored
-  let dragable = m.pDragMode != dmNone
+  let dragable = m.pDragMode != dmNone or m.pDragRestrictionRect.isSome
 
   if m.checkLRelease(ev):
     m.onLRelease.invoke
@@ -157,13 +170,19 @@ method processEvent*(m: MouseArea, ev: Event): EventResult=
     if m.checkLRelease(ev, within=false):
       m.dragActive = false
       m.onDragEnd.invoke
-      result = erconsumed
+      result = erConsumed
     if ev.kind == MouseMotion:
-      let 
-        pos = v(ev.motion.x, ev.motion.y)
-        diff = m.pDragMode.diff(pos, m.lastMousePos)
-      m.lastMousePos = pos
-      m.pos.set m.pos.get() + diff
+      result = erConsumed
+      if m.pDragRestrictionRect.isSome:
+        let rect = restrictTo(v(ev.motion.x, ev.motion.y) & m.size.get(),
+                              m.pDragRestrictionRect.unsafeGet)
+        m.pos.set rect.pos
+      else:  # If a DragRestrictionRect is Set, the drag Mode is ignored
+        let 
+          pos = v(ev.motion.x, ev.motion.y)
+          diff = m.pDragMode.diff(pos, m.lastMousePos)
+        m.lastMousePos = pos
+        m.pos.set m.pos.get() + diff
 
 
 
@@ -178,25 +197,147 @@ method processEvent*(m: MouseArea, ev: Event): EventResult=
 type Flickable* = ref object of NElem
   inner: Texture
   innerW, innerH: cint
+  innerX, innerY: cint ## \
+    ## Holds the position of the inner texture in relation to the Flickable's
+    ## Rect. This will always be less or equal than (0, 0). Only relevant when
+    ## the Flickable has scrollbars and the texture is bigger than the
+    ## Flickable
   innerRedrawRequired*: bool
   innerVAlign*, innerHAlign*: Alignment
   vBarMouseArea, hBarMouseArea: MouseArea
   scrollBarBackground*, scrollBarSlider*: Property(NElem)
   pScrollBarBackground, pScrollBarSlider: NElem
   pScrollBarThickness: cint
-  scrollBarThickness: Property(cint)
+  scrollBarThickness*: Property(cint)
+  viewRect: Rect
+  vBarRect, hBarRect: Option[Rect]
+
+
+proc getVSliderRect(f: Flickable): Rect =
+  let viewRect = f.rect.get()
+  if viewRect == v(0, 0, 0, 0) or f.innerH == 0:
+    return viewRect
+
+  let
+    relativeOffset = -f.innerY / f.innerH
+    sliderBGHeight = viewRect.h - f.pScrollBarThickness
+    sliderY = sliderBGHeight * relativeOffset + viewRect.y
+    sliderH: cint = viewRect.h.float / f.innerH.float * sliderBGHeight.float
+  v(viewRect.right - f.pScrollBarThickness, sliderY, f.pScrollBarThickness,
+    sliderH)
+
+
+proc getHSliderRect(f: Flickable): Rect =
+  let viewRect = f.rect.get()
+  if viewRect == v(0, 0, 0, 0) or f.innerW == 0:
+    return viewRect
+
+  let
+    relativeOffset = -f.innerX / f.innerW
+    sliderBGWidth = viewRect.w - f.pScrollBarThickness
+    sliderX = sliderBGWidth * relativeOffset + viewRect.x
+    sliderW: cint = viewRect.w.float / f.innerW.float * sliderBGWidth.float
+  v(sliderX, viewRect.bottom - f.pScrollBarThickness, sliderW,
+    f.pScrollBarThickness)
+
+
+template adjustInnerPos(f: Flickable, val: cint,
+                        prefix, x_or_y, w_or_h: untyped) =
+  let barRectOpt = f.`prefix BarRect`
+  if barRectOpt.isSome:
+    let
+      barRect = barRectOpt.unsafeGet
+      fRect = f.rect.get()
+      relOffset = float(val - barRect.x_or_y) /
+        float(barRect.w_or_h - f.`prefix BarMouseArea`.w_or_h.get())
+      maxRange = f.`inner w_or_h` - fRect.w_or_h
+    f.`inner x_or_y` = -maxRange.float * relOffset
+
+proc updateDimensions(f: Flickable, myRect: Rect) =
+  ## computes the Rects for the display of the inner texture, and both
+  ## scrollbars. Gets called uppon resize
+  let innerSize = v(f.innerW, f.innerH)
+
+  proc vBarRect(): auto = some(v(myRect.right - f.pScrollBarThickness,
+                                 myRect.top,
+                                 f.pScrollBarThickness,
+                                 myRect.h - f.pScrollBarThickness))
+
+  proc hBarRect(): auto = some(v(myRect.left,
+                                 myRect.bottom - f.pScrollBarThickness,
+                                 myRect.w - f.pScrollBarThickness,
+                                 f.pScrollBarThickness))
+
+  proc displayRect(reduceW, reduceH: bool): Rect =
+    myRect.pos & (myRect.size - v(if reduceW: f.pScrollBarThickness else: 0,
+                                  if reduceH: f.pScrollBarThickness else: 0))
+  
+  template setVals(view, vert, horz): untyped =
+    f.viewRect = view
+    f.vBarRect = vert
+    f.vBarMouseArea.dragRestrictionRect.set vert
+    f.hBarRect = horz
+    f.hBarMouseArea.dragRestrictionRect.set horz
+
+  if innerSize.fitsIn(myRect.size):
+    setVals(myRect, none(Rect), none(Rect))
+  elif myRect.size.fitsIn(innerSize):
+    # the inner rect is larger in both dimensions, both bars needed
+    setVals(displayRect(true, true), vBarRect(), hBarRect())
+  elif myRect.w < innerSize.w:
+    # Needs a the horizontal scrollbar, but that costs vertical space, so I
+    # need to check whether the vertival space - the bar is still large enoug
+    if myRect.h - f.pScrollBarThickness >= innerSize.h:
+      setVals(displayRect(false, true), none(Rect), hBarRect())
+    else:
+      setVals(displayRect(true, true), vBarRect(), hBarRect())
+  elif myRect.h < innerSize.h:
+    if myRect.w - f.pScrollBarThickness >= innerSize.w:
+      setVals(displayRect(true, false), vBarRect(), none(Rect))
+    else:
+      setVals(displayRect(true, true), vBarRect(), hBarRect())
 
 
 proc initFlickable*(f: Flickable) =
   f.initNElem()
-  f.vBarMouseArea = newMouseArea()
-  f.hBarMouseArea = newMouseArea()
   f.scrollBarBackground = newProperty[NElem, EventNElem](
     proc(): NElem = f.pScrollBarBackground,
     proc(n: NElem) = f.pScrollBarBackground = n)
+
+  f.rect.onChange.add proc(r: Rect) =
+    f.updateDimensions(r)
+    f.hBarMouseArea.rect.set f.getHSliderRect()
+    f.vBarMouseArea.rect.set f.getVSliderRect()
+
+  f.vBarMouseArea = newMouseArea()
+  f.hBarMouseArea = newMouseArea()
+
+  proc setSlider(s: NElem) =
+    f.pScrollBarSlider = s
+    let 
+      vertS = s
+      horzS = s.deepCopy
+
+    f.vBarMouseArea = newMouseArea()
+    f.vBarMouseArea.parent = f
+    f.vBarMouseArea.rect.onChange.add proc(r: Rect) =
+      vertS.rect.set r
+    f.vBarMouseArea.y.onChange.add proc(val: cint) =
+      f.adjustInnerPos(val, v, y, h)
+    f.vBarMouseArea.add vertS
+    
+    f.hBarMouseArea = newMouseArea()
+    f.hBarMouseArea.parent = f
+    f.hBarMouseArea.rect.onChange.add proc(r: Rect) =
+      horzS.rect.set r
+    f.hBarMouseArea.x.onChange.add proc(val: cint) =
+      f.adjustInnerPos(val, h, x, w)
+    f.hBarMouseArea.add horzS
+
   f.scrollBarSlider = newProperty[NElem, EventNElem](
     proc(): NElem = f.pScrollBarSlider,
-    proc(n: NElem) = f.pScrollBarSlider = n)
+    setSlider)
+
   f.scrollBarThickness = newProperty[cint, EventCint](
     proc(): cint = f.pScrollBarThickness,
     proc(i: cint) = f.pScrollBarThickness = i)
@@ -212,6 +353,10 @@ proc recreateInnerTexture*(f: Flickable, renderer: RendererPtr, w, h: cint) =
     SDL_TEXTUREACCESS_TARGET, w, h)
   f.inner.data.setTextureBlendMode BlendMode_Blend
 
+  f.updateDimensions(f.rect.get())
+  f.hBarMouseArea.rect.set f.getHSliderRect()
+  f.vBarMouseArea.rect.set f.getVSliderRect()
+
 proc innerW*(f: Flickable): cint = f.innerW
 proc innerH*(f: Flickable): cint = f.innerH
 
@@ -223,46 +368,6 @@ proc hasScrollBars(f: Flickable): bool =
   not f.pScrollBarBackground.isNil and not f.pScrollBarSlider.isNil
 
 
-proc getDimensionsWithScrollBars(f: Flickable):
-    (Rect, Option[Rect], Option[Rect]) =
-  ## computes the Rects for the display of the inner texture, and both
-  ## scrollbars. However, ScrollBars are optional. The first opt rect is the
-  ## vertical bar, the 2nd one the horizontal one
-  let 
-    myRect = f.rect.get()
-    innerSize = v(f.innerW, f.innerH)
-
-  proc vBarRect(): auto = some(v(myRect.right - f.pScrollBarThickness,
-                                 myRect.top,
-                                 f.pScrollBarThickness, myRect.h))
-
-  proc hBarRect(): auto = some(v(myRect.left,
-                                 myRect.bottom - f.pScrollBarThickness,
-                                 myRect.w, f.pScrollBarThickness))
-
-  proc displayRect(reduceW, reduceH: bool): Rect =
-    myRect.pos & (myRect.size - v(if reduceW: f.pScrollBarThickness else: 0,
-                                  if reduceH: f.pScrollBarThickness else: 0))
-
-  if innerSize.fitsIn(myRect.size):
-    return (myRect, none(Rect), none(Rect))
-  elif myRect.size.fitsIn(innerSize):
-    # the inner rect is larger in both dimensions, both bars needed
-    return (displayRect(true, true), vBarRect(), hBarRect())
-  elif myRect.w < innerSize.w:
-    # Needs a the horizontal scrollbar, but that costs vertical space, so I
-    # need to check whether the vertival space - the bar is still large enoug
-    if myRect.h - f.pScrollBarThickness >= innerSize.h:
-      return (displayRect(false, true), none(Rect), hBarRect())
-    else:
-      return (displayRect(true, true), vBarRect(), hBarRect())
-  elif myRect.h < innerSize.h:
-    if myRect.w - f.pScrollBarThickness >= innerSize.w:
-      return (displayRect(true, false), vBarRect(), none(Rect))
-    else:
-      return (displayRect(true, true), vBarRect(), hBarRect())
-
-
 method draw*(f: Flickable, parentRect: Rect, renderer: RendererPtr) =
   if f.innerRedrawRequired:
     f.innerRedrawRequired = false
@@ -270,26 +375,19 @@ method draw*(f: Flickable, parentRect: Rect, renderer: RendererPtr) =
 
   let tr = f.rect.get()  # targetRect
   if f.hasScrollBars:
-    let (innerSize, vScrollBar, hScrollBar) = f.getDimensionsWithScrollBars()
-    renderer.withClip innerSize:
+    renderer.withClip f.viewRect:
       renderer.copy f.inner, v(0, 0, f.innerW, f.innerH),
-        (tr.pos +
-        v(f.innerHAlign.getX(f.innerW, tr.w),
-          f.innerVAlign.getY(f.innerH, tr.h))) & v(f.innerW, f.innerH)
-    if vScrollBar.isSome:
-      let r = vScrollBar.unsafeget
-      echo "vscrollbar: ", r
+        (tr.pos + v(f.innerX, f.innerY)) & v(f.innerW, f.innerH)
+    if f.vBarRect.isSome:
+      let r = f.vBarRect.unsafeget
       f.pScrollBarBackground.rect.set r
       f.pScrollBarBackground.draw(tr, renderer)
-    if hScrollBar.isSome:
-      let r = hScrollBar.unsafeget
-      echo "hscrollbar: ", r
+      f.vBarMouseArea.draw(tr, renderer)
+    if f.hBarRect.isSome:
+      let r = f.hBarRect.unsafeget
       f.pScrollBarBackground.rect.set r
-      echo f.pScrollBarBackground.rect.get()
-      # so for whatever reason f.pScrollBarBackground.rect is not the same var
-      # as r.rect from within the draw method. Could be a nim related
-      # inheritance thing ... make a minimal example to test
       f.pScrollBarBackground.draw(tr, renderer)
+      f.hBarMouseArea.draw(tr, renderer)
   else:
     renderer.withClip tr:
       renderer.copy f.inner, v(0, 0, f.innerW, f.innerH),
@@ -297,6 +395,22 @@ method draw*(f: Flickable, parentRect: Rect, renderer: RendererPtr) =
         v(f.innerHAlign.getX(f.innerW, tr.w),
           f.innerVAlign.getY(f.innerH, tr.h))) & v(f.innerW, f.innerH)
 
+
+template processSlider(f: Flickable, ev: Event, prefix: untyped): untyped =
+  let areaOpt = f.`prefix BarRect`
+  if areaOpt.isSome:
+    let 
+      slider = f.`prefix BarMouseArea`
+      res = slider.processEvent ev
+
+    if res != erIgnored:
+      return res
+
+
+method processEvent*(f: Flickable, ev: Event): EventResult =
+  f.processSlider(ev, v)
+  f.processSlider(ev, h)
+  f.processEventDefaultImpl ev
 
 
 # -----------------------------------------------------------------------------

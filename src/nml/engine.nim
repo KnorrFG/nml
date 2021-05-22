@@ -206,14 +206,16 @@ method draw*(e: NElem, parentRect: Rect, renderer: RendererPtr)
     c.draw(parentRect, renderer)
 
 
-method processEvent*(e: NElem, ev: Event): EventResult
-  {.base, locks: 0.} =
+template processEventDefaultImpl*(e: NElem, ev: Event): EventResult =
   for c in e.children:
     let res = c.processEvent(ev)
     if res != erIgnored:
       return res
-
   erIgnored
+
+
+method processEvent*(e: NElem, ev: Event): EventResult {.base, locks: 0.} =
+  e.processEventDefaultImpl ev
 
 
 proc add*(e: NElem, child: NElem) =
@@ -244,6 +246,7 @@ proc createWindow*(e: Engine, w, h: int, root: NElem, title = "",
   win.renderer.setDrawBlendMode BlendMode_Blend
   root.pWindow = win
   win.rootElem = root
+  root.rect.set(v(0.cint, 0.cint, w.cint, h.cint))
   e.windows.add win
 
 

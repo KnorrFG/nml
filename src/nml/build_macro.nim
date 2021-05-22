@@ -472,5 +472,5 @@ macro mkui*(args: varargs[untyped]): untyped =
   result = typeDefinition(name, ctor,
                           finalElems.elemsToAst & forwardings.makeAsgnStmts,
                           memberDefs)
-  echo result.repr
+  #echo result.repr
 
