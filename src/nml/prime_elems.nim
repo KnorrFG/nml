@@ -221,10 +221,12 @@ proc getVSliderRect(f: Flickable): Rect =
     return viewRect
 
   let
+    viewRectHOffset = if f.hBarRect.isSome: f.pScrollBarThickness else: 0
     relativeOffset = -f.innerY / f.innerH
     sliderBGHeight = viewRect.h - f.pScrollBarThickness
     sliderY = sliderBGHeight * relativeOffset + viewRect.y
-    sliderH: cint = viewRect.h.float / f.innerH.float * sliderBGHeight.float
+    sliderH: cint = (viewRect.h.float - viewRectHOffset.float) /
+                     f.innerH.float * sliderBGHeight.float
   v(viewRect.right - f.pScrollBarThickness, sliderY, f.pScrollBarThickness,
     sliderH)
 
@@ -235,10 +237,12 @@ proc getHSliderRect(f: Flickable): Rect =
     return viewRect
 
   let
+    viewRectWOffset = if f.vBarRect.isSome: f.pScrollBarThickness else: 0
     relativeOffset = -f.innerX / f.innerW
     sliderBGWidth = viewRect.w - f.pScrollBarThickness
     sliderX = sliderBGWidth * relativeOffset + viewRect.x
-    sliderW: cint = viewRect.w.float / f.innerW.float * sliderBGWidth.float
+    sliderW: cint = (viewRect.w.float - viewRectWOffset.float) /
+                     f.innerW.float * sliderBGWidth.float
   v(sliderX, viewRect.bottom - f.pScrollBarThickness, sliderW,
     f.pScrollBarThickness)
 
@@ -254,8 +258,9 @@ template adjustInnerPos(f: Flickable, val: cint,
       fRect = f.rect.get()
       relOffset = float(val - barRect.x_or_y) /
         float(barRect.w_or_h - f.`prefix BarMouseArea`.w_or_h.get())
-      maxRange = f.`inner w_or_h` - fRect.w_or_h
+      maxRange = f.`inner w_or_h` - fRect.w_or_h + f.pScrollBarThickness
     f.`inner x_or_y` = -maxRange.float * relOffset
+
 
 proc updateDimensions(f: Flickable, myRect: Rect) =
   ## computes the Rects for the display of the inner texture, and both
