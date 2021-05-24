@@ -76,3 +76,15 @@ template withClip*(renderer: RendererPtr, rect: Rect, code: typed): untyped =
 proc fillRect*(r: RendererPtr, target: Rect) =
   let t: sdl2.Rect = target
   r.fillRect t.unsafeaddr
+
+
+# -----------------------------------------------------------------------------
+# Other
+# -----------------------------------------------------------------------------
+
+proc getMousePos*(): NVec[2, cint] =
+  var x, y: cint
+  getMouseState x, y
+  v(x, y)
+
+

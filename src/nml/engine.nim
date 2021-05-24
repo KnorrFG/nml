@@ -206,11 +206,15 @@ method draw*(e: NElem, parentRect: Rect, renderer: RendererPtr)
     c.draw(parentRect, renderer)
 
 
+template checkEventResult*(x: untyped): untyped =
+  let res = x
+  if res != erIgnored:
+    return res
+
+
 template processEventDefaultImpl*(e: NElem, ev: Event): EventResult =
   for c in e.children:
-    let res = c.processEvent(ev)
-    if res != erIgnored:
-      return res
+    checkEventResult c.processEvent(ev)
   erIgnored
 
 

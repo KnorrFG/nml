@@ -184,6 +184,8 @@ method processEvent*(m: MouseArea, ev: Event): EventResult=
         m.lastMousePos = pos
         m.pos.set m.pos.get() + diff
 
+  if result == erIgnored:
+    result = m.processEventDefaultImpl ev
 
 
 # -----------------------------------------------------------------------------
@@ -243,6 +245,8 @@ proc getHSliderRect(f: Flickable): Rect =
 
 template adjustInnerPos(f: Flickable, val: cint,
                         prefix, x_or_y, w_or_h: untyped) =
+  ## adjusts innerX or innerY based on the slider positions. valid param kombis
+  ## are v, y, h or h, x, w
   let barRectOpt = f.`prefix BarRect`
   if barRectOpt.isSome:
     let
@@ -399,17 +403,32 @@ method draw*(f: Flickable, parentRect: Rect, renderer: RendererPtr) =
 template processSlider(f: Flickable, ev: Event, prefix: untyped): untyped =
   let areaOpt = f.`prefix BarRect`
   if areaOpt.isSome:
-    let 
-      slider = f.`prefix BarMouseArea`
-      res = slider.processEvent ev
+    let slider = f.`prefix BarMouseArea`
+    checkEventResult slider.processEvent ev
 
-    if res != erIgnored:
-      return res
+
+proc checkMouseWheel(f: Flickable, ev: Event): EventResult =
+  if f.vBarRect.isNone:  # this implies, that scrollbars arent visible
+    return erIgnored
+
+  let myRect = f.rect.get()
+  if ev.kind == MouseWheel and myRect.contains(getMousePos()):
+    var offset: cint = if ev.wheel.y < 0: 10
+                       elif ev.wheel.y > 0: -10
+                       else: 0
+    if offset != 0:
+      var vSliderRect = f.vBarMouseArea.rect.get() + v(0, offset, 0, 0)
+      f.vBarMouseArea.pos.set vSliderRect.restrictTo(
+        f.vBarMouseArea.pDragRestrictionRect.get).pos
+      return erConsumed
+
+  return erIgnored
 
 
 method processEvent*(f: Flickable, ev: Event): EventResult =
   f.processSlider(ev, v)
   f.processSlider(ev, h)
+  checkEventResult f.checkMouseWheel ev
   f.processEventDefaultImpl ev
 
 

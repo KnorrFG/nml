@@ -43,7 +43,7 @@ suite "Interactive":
 
         Text:
           text unindent"""Click Me.
-                          I have two lines"""
+                         I have two lines"""
           fontFile "tests/font.ttf"
           pointSize 20
           vAlign aCenter
